@@ -1,0 +1,70 @@
+[package]
+name = "vocaflow"
+version = "0.1.0"
+description = "Context-aware dictation"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "vocaflow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+parking_lot = "0.12"
+log = "0.4"
+env_logger = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream"] }
+cpal = "0.16"
+rubato = "0.16"
+whisper-rs = "0.15"
+candle-core = "0.9"
+candle-transformers = "0.9"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+arboard = { version = "3", features = ["wayland-data-control"] }
+enigo = "0.5"
+active-win-pos-rs = "0.9"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+once_cell = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSString", "NSArray"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSVisualEffectView", "NSResponder", "NSAnimationContext", "NSColor", "NSWorkspace", "NSRunningApplication", "NSScreen"] }
+objc2-quartz-core = { version = "0.3", features = ["CAMediaTimingFunction", "CALayer"] }
+accessibility-sys = "0.2"
+core-foundation = "0.10"
+whisper-rs = { version = "0.15", features = ["metal"] }
+candle-core = { version = "0.9", features = ["metal"] }
+candle-transformers = { version = "0.9", features = ["metal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+window-vibrancy = "0.8"
+uiautomation = "0.22"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+atspi = { version = "0.28", default-features = false, features = ["tokio", "proxies", "connection"] }
+gtk = "0.18"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+opt-level = 3
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 3
