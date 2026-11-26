@@ -198,13 +198,15 @@ impl Models {
         notify(self.state());
     }
 
-    /// Formatting switched off: stop any download and free the disk.
-    pub fn drop_formatter(&self) {
+    /// Formatting switched off: stop any download in flight. A finished
+    /// model stays on disk so switching back on is instant.
+    pub fn pause_formatter(&self) {
         self.formatter_gen.fetch_add(1, Ordering::SeqCst);
         for s in FORMATTER.iter() {
-            let _ = std::fs::remove_file(self.path(s.file));
+            let _ = std::fs::remove_file(self.path(s.file).with_extension("part"));
         }
-        *self.formatter.lock() = Status::Missing;
+        let ready = self.has_formatter();
+        *self.formatter.lock() = if ready { Status::Ready } else { Status::Missing };
     }
 
     fn remove_other_speech(&self, keep: Quality) {

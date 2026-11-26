@@ -290,6 +290,15 @@ impl Core {
         if let Some((w, h)) = sweep {
             let _ = self.app.emit_to("fx", "fx://insert", serde_json::json!({ "width": w, "height": h }));
         }
+        // Without Accessibility, macOS silently drops synthetic keystrokes:
+        // keep the text on the clipboard and say so instead of losing it.
+        #[cfg(target_os = "macos")]
+        if !crate::platform::macos::ax_trusted(false) {
+            let _ = arboard::Clipboard::new().and_then(|mut c| c.set_text(text.trim().to_string()));
+            self.record(&text, &raw, &ctx, kind, started);
+            self.flash("Copied, allow Accessibility", 2400);
+            return;
+        }
         if let Err(e) = insert::insert(&text, method, kind == Kind::Terminal) {
             log::error!("insert: {e:#}");
             self.record(&text, &raw, &ctx, kind, started);
@@ -355,7 +364,7 @@ impl Core {
             });
         } else {
             self.formatter.unload();
-            self.models.drop_formatter();
+            self.models.pause_formatter();
             self.emit_models();
         }
     }
