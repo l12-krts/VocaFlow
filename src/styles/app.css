@@ -1,0 +1,291 @@
+@import "tailwindcss";
+@import "krts.ui/tailwind.css";
+@source "../";
+
+/*
+ * VocaFlow tokens
+ * ---------------
+ * krts.ui supplies the components; we re-tint its neutrals cool so they sit
+ * next to the pill (Figma #CAD4E7 / #A9AEBE) and swap its near-black primary
+ * for the VocaFlow blue from the pill gradient.
+ */
+:root {
+  --vf-blue: #125cf5;
+  --vf-cyan: #45cfff;
+  --vf-violet: #7a5cff;
+  --vf-gradient: linear-gradient(90deg, rgb(18 92 245 / 0.76), rgb(69 207 255 / 0.7));
+
+  --krts-bg: #ffffff;
+  --krts-fg: #141820;
+  --krts-fg-muted: #555c6c;
+  --krts-fg-subtle: #6b7282;
+  --krts-surface: #f2f4f8;
+  --krts-surface-hover: #e8ebf1;
+  --krts-surface-pressed: #dde1e9;
+  --krts-overlay: #ffffff;
+  --krts-line: #d5dae4;
+  --krts-line-strong: #a9aebe;
+  --krts-line-subtle: #e9ecf2;
+
+  --krts-primary: #135cf5;
+  --krts-primary-hover: #2a6cf7;
+  --krts-primary-pressed: #0f50da;
+  --krts-primary-line: #0d4ad0;
+  --krts-primary-fg: #ffffff;
+  --krts-focus: #135cf5;
+
+  /* Window chrome */
+  --vf-window: #f7f8fb;
+  --vf-sidebar: #eef1f6;
+  --vf-tip-bg: #1b1f27;
+  --vf-tip-fg: #f4f6fa;
+}
+
+:root[data-theme="dark"] {
+  --krts-bg: #121419;
+  --krts-fg: #f1f3f7;
+  --krts-fg-muted: #a5acbb;
+  --krts-fg-subtle: #8b92a2;
+  --krts-surface: #1b1e25;
+  --krts-surface-hover: #232731;
+  --krts-surface-pressed: #2b303b;
+  --krts-overlay: #1b1e25;
+  --krts-line: #2d323d;
+  --krts-line-strong: #4a5162;
+  --krts-line-subtle: #22262e;
+
+  --krts-primary: #3d7dff;
+  --krts-primary-hover: #5a90ff;
+  --krts-primary-pressed: #2c6cf0;
+  --krts-primary-line: #6a9bff;
+  --krts-primary-fg: #ffffff;
+  --krts-focus: #5a90ff;
+
+  --vf-window: #0f1115;
+  --vf-sidebar: #15181e;
+  --vf-tip-bg: #f1f3f7;
+  --vf-tip-fg: #121419;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-brand: "Allo", "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --color-window: var(--vf-window);
+  --color-sidebar: var(--vf-sidebar);
+  --color-tip: var(--vf-tip-bg);
+  --color-tip-fg: var(--vf-tip-fg);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-window font-sans text-fg antialiased;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+    overflow: hidden;
+  }
+  /* A desktop app, not a web page: no text-selection or drag ghosts on chrome. */
+  img,
+  svg {
+    -webkit-user-drag: none;
+  }
+  input,
+  textarea,
+  [data-selectable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* ---------- Accuracy slider ------------------------------------------ */
+
+.vf-fill > span {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.vf-fill-solid {
+  background: var(--krts-primary);
+  transition: opacity 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.vf-fill-liquid {
+  opacity: 0;
+  background: linear-gradient(90deg, #125cf5, #45cfff, #7a5cff, #2a7bff, #45cfff, #125cf5);
+  background-size: 300% 100%;
+  transition: opacity 400ms cubic-bezier(0.23, 1, 0.32, 1);
+  animation: vf-flow 6s linear infinite;
+  animation-play-state: paused;
+}
+.vf-fill-glow {
+  opacity: 0;
+  inset: -3px -2px !important;
+  background: inherit;
+  background: linear-gradient(90deg, #125cf5, #45cfff, #7a5cff, #45cfff);
+  background-size: 300% 100%;
+  filter: blur(7px);
+  z-index: -1;
+  transition: opacity 500ms cubic-bezier(0.23, 1, 0.32, 1);
+  animation: vf-flow 6s linear infinite;
+  animation-play-state: paused;
+}
+[data-ultra] .vf-fill-solid {
+  opacity: 0;
+}
+[data-ultra] .vf-fill-liquid {
+  opacity: 1;
+  animation-play-state: running;
+}
+[data-ultra] .vf-fill-glow {
+  opacity: 0.55;
+  animation-play-state: running;
+}
+@keyframes vf-flow {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 300% 50%;
+  }
+}
+
+.vf-thumb {
+  box-shadow: 0 0 1px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.15);
+  transition-property: left, box-shadow;
+}
+.vf-thumb[data-hovered] {
+  box-shadow: 0 0 1px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.15), 0 0 0 5px rgb(19 92 245 / 0.1);
+}
+.vf-thumb[data-dragging] {
+  box-shadow: 0 0 1px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.15), 0 0 0 7px rgb(19 92 245 / 0.14);
+}
+.vf-thumb-halo {
+  position: absolute;
+  inset: -5px;
+  border-radius: 9999px;
+  opacity: 0;
+  background: conic-gradient(from 0deg, #125cf5, #45cfff, #7a5cff, #125cf5);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  transition: opacity 400ms cubic-bezier(0.23, 1, 0.32, 1);
+  animation: vf-spin 3.2s linear infinite;
+  animation-play-state: paused;
+  pointer-events: none;
+}
+[data-ultra] .vf-thumb-halo {
+  opacity: 1;
+  animation-play-state: running;
+}
+@keyframes vf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.vf-ultra-label {
+  background: linear-gradient(90deg, #125cf5, #45cfff, #7a5cff, #125cf5);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+  animation: vf-flow 6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vf-fill-liquid,
+  .vf-fill-glow,
+  .vf-thumb-halo,
+  .vf-ultra-label {
+    animation: none !important;
+  }
+}
+
+/* Content swap: a quick fade with a hint of blur so it reads as one change. */
+.vf-fade {
+  animation: vf-fade 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes vf-fade {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+}
+
+/* ---------- Onboarding ------------------------------------------------ */
+
+.vf-hero-mark {
+  background: linear-gradient(135deg, #125cf5, #45cfff);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18), inset 0 6px 14px rgb(255 255 255 / 0.18), 0 10px 30px -8px rgb(18 92 245 / 0.55);
+}
+.vf-gradient-text {
+  background: linear-gradient(90deg, #125cf5, #2aa0fa 60%, #45cfff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+[data-theme="dark"] .vf-gradient-text {
+  background: linear-gradient(90deg, #5c94ff, #6ec8ff 60%, #8ce1ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* Hold: key goes down and stays while a wave grows. Tap: quick press. */
+.vf-key {
+  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.08);
+}
+.vf-key-hold {
+  animation: vf-hold 2.4s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+.vf-key-tap {
+  animation: vf-tap 2.4s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+@keyframes vf-hold {
+  0%, 10% { transform: translateY(0); box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.08); }
+  16%, 76% { transform: translateY(2px); box-shadow: inset 0 0 0 rgb(0 0 0 / 0.08); background: var(--krts-surface-pressed); }
+  84%, 100% { transform: translateY(0); }
+}
+@keyframes vf-tap {
+  0%, 10% { transform: translateY(0); }
+  14% { transform: translateY(2px); background: var(--krts-surface-pressed); }
+  20%, 100% { transform: translateY(0); }
+}
+.vf-keywave {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 34px;
+  height: 6px;
+  margin-left: -17px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, rgb(18 92 245 / 0.76), rgb(69 207 255 / 0.7));
+  transform-origin: center;
+  opacity: 0;
+}
+.vf-keywave-hold {
+  animation: vf-wave-hold 2.4s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+.vf-keywave-tap {
+  animation: vf-wave-tap 2.4s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+@keyframes vf-wave-hold {
+  0%, 14% { opacity: 0; transform: scaleX(0.4); }
+  22%, 74% { opacity: 1; transform: scaleX(1); }
+  84%, 100% { opacity: 0; transform: scaleX(0.6); }
+}
+@keyframes vf-wave-tap {
+  0%, 14% { opacity: 0; transform: scaleX(0.4); }
+  24%, 66% { opacity: 1; transform: scaleX(1); }
+  70% { opacity: 1; transform: scaleX(1); }
+  74% { opacity: 1; }
+  78%, 100% { opacity: 0; transform: scaleX(0.6); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vf-key-hold, .vf-key-tap, .vf-keywave-hold, .vf-keywave-tap {
+    animation: none;
+  }
+  .vf-keywave { opacity: 1; }
+}

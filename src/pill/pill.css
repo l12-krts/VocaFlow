@@ -1,0 +1,174 @@
+@import "tailwindcss";
+@source "./";
+
+/* The pill window is a transparent, click-through overlay. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: transparent !important;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+/*
+ * Anchored from the top: the window is 112px tall (pill 72 + 26 above for
+ * the enter lift + 14 below for the shadow), but some window managers
+ * enforce a taller minimum. A top offset keeps the pill exactly 14px above
+ * the taskbar/Dock no matter how tall the window ends up.
+ */
+#root {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 26px;
+  box-sizing: border-box;
+}
+
+/* ---------- Surface ---------------------------------------------------- */
+
+/*
+ * Windows / Linux (Figma "Windows - *"): #CAD4E7 @ 75% with a #A9AEBE @ 75%
+ * hairline. The window behind is transparent, so CSS can't blur the
+ * desktop; we lean slightly more opaque so text stays legible on busy
+ * wallpapers. On Windows the backend adds real acrylic behind this.
+ */
+.pill {
+  --pill-fill: rgb(202 212 231 / 0.86);
+  --pill-line: rgb(169 174 190 / 0.75);
+  --pill-shadow: 0 0 4px rgb(0 0 0 / 0.05), 0 6px 18px -6px rgb(20 30 60 / 0.22);
+  background: var(--pill-fill);
+  box-shadow: inset 0 0 0 1px var(--pill-line), var(--pill-shadow);
+  will-change: transform, opacity, width;
+  contain: layout paint;
+}
+
+.pill[data-os="windows"][data-acrylic] {
+  --pill-fill: rgb(202 212 231 / 0.75);
+}
+
+/*
+ * macOS (Figma "Mac - *"): #E3EDFF @ 23% tint over real Liquid Glass. The
+ * native NSGlassEffectView sits behind the transparent webview and supplies
+ * refraction; this layer only adds the tint and the hairline.
+ */
+.pill[data-os="macos"] {
+  --pill-fill: rgb(227 237 255 / 0.23);
+  --pill-line: rgb(169 174 190 / 0.75);
+  --pill-shadow: 0 0 4px rgb(0 0 0 / 0.05);
+}
+/* Browser preview of the mac pill: approximate the glass. */
+[data-preview] .pill[data-os="macos"] {
+  backdrop-filter: blur(10px) saturate(1.8) brightness(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.8) brightness(1.06);
+}
+
+[data-theme="dark"] .pill {
+  --pill-fill: rgb(28 33 44 / 0.86);
+  --pill-line: rgb(255 255 255 / 0.1);
+  --pill-shadow: 0 0 4px rgb(0 0 0 / 0.2), 0 8px 22px -6px rgb(0 0 0 / 0.5);
+}
+[data-theme="dark"] .pill[data-os="windows"][data-acrylic] {
+  --pill-fill: rgb(28 33 44 / 0.72);
+}
+[data-theme="dark"] .pill[data-os="macos"] {
+  --pill-fill: rgb(18 22 32 / 0.22);
+  --pill-line: rgb(255 255 255 / 0.14);
+}
+
+/* Figma: monotone noise at 25% over the gradient shapes — a whisper of grain on the surface too. */
+.pill-noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 1 0'/></filter><rect width='120' height='120' filter='url(%23n)'/></svg>");
+}
+
+/* ---------- Gradient shapes ------------------------------------------- */
+
+.pill-blob {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: linear-gradient(90deg, rgb(18 92 245 / 0.76), rgb(69 207 255 / 0.7));
+  opacity: 0.85;
+  box-shadow: inset 0 4px 5.2px rgb(157 203 255 / 0.88);
+}
+
+/*
+ * Constant motion: the bar travels dot → dot → dot. Height (not scaleY) so
+ * the 9px radius stays round; three 18px elements are cheap to lay out.
+ */
+.loader-blob {
+  animation: vf-travel 1.05s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+}
+@keyframes vf-travel {
+  0%,
+  62%,
+  100% {
+    height: 18px;
+  }
+  28% {
+    height: 44px;
+  }
+}
+[data-reduced] .loader-blob {
+  animation: vf-pulse 1.4s ease-in-out infinite;
+}
+@keyframes vf-pulse {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Figma: Inter Medium 16 with the gradient fill. */
+.pill-label {
+  font-family: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 16px;
+  line-height: 19px;
+  letter-spacing: -0.01em;
+}
+.pill-gradient-text {
+  background: linear-gradient(90deg, rgb(18 92 245), rgb(40 160 250) 60%, rgb(69 207 255));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+[data-theme="dark"] .pill-gradient-text {
+  background: linear-gradient(90deg, rgb(92 148 255), rgb(110 200 255) 60%, rgb(140 225 255));
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.pill-message {
+  color: rgb(40 46 60);
+}
+[data-theme="dark"] .pill-message {
+  color: rgb(225 230 240);
+}
+
+/* Browser-only design review backdrop (never in the app). */
+body.preview-bg {
+  background:
+    radial-gradient(40% 60% at 30% 80%, #f7b267 0%, transparent 60%),
+    radial-gradient(35% 50% at 62% 85%, #2a9d8f 0%, transparent 65%),
+    radial-gradient(30% 40% at 48% 70%, #e76f51 0%, transparent 70%),
+    linear-gradient(180deg, #a8c5e8 0%, #5d7fa8 55%, #264653 100%) !important;
+}
+body.preview-bg[data-dark],
+[data-theme="dark"] body.preview-bg {
+  background:
+    radial-gradient(40% 60% at 30% 80%, #6d3b47 0%, transparent 60%),
+    radial-gradient(35% 50% at 62% 85%, #1d4e5f 0%, transparent 65%),
+    linear-gradient(180deg, #111827 0%, #1f2937 60%, #0b1220 100%) !important;
+}
