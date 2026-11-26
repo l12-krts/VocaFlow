@@ -62,7 +62,7 @@ jobs:
       # the default target/ path, so build in a short directory there.
       # and build for the host triple (drops x86_64-pc-windows-msvc from
       # every path).
-      TARGET_DIR: ${{ startsWith(matrix.platform, 'windows') && 'C:/t' || 'src-tauri/target' }}
+      TARGET_DIR: ${{ startsWith(matrix.platform, 'windows') && 'C:/t' || format('{0}/src-tauri/target', github.workspace) }}
       TARGET_ARG: ${{ !startsWith(matrix.platform, 'windows') && format('--target {0}', matrix.target) || '' }}
       BUNDLE_DIR: ${{ startsWith(matrix.platform, 'windows') && 'C:/t/release/bundle' || format('src-tauri/target/{0}/release/bundle', matrix.target) }}
     steps:
