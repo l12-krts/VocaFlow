@@ -65,6 +65,23 @@ impl Engine {
         params.flash_attn(cfg!(target_os = "macos"));
         let ctx = WhisperContext::new_with_params(&path.to_string_lossy(), params)
             .map_err(|e| anyhow!("Couldn't load the speech model ({e})"))?;
+        // One silent pass compiles the GPU pipelines and touches every
+        // weight, so the user's first dictation isn't the slow one.
+        let t = std::time::Instant::now();
+        if let Ok(mut state) = ctx.create_state() {
+            let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            p.set_n_threads(threads());
+            p.set_language(Some("en"));
+            p.set_no_context(true);
+            p.set_single_segment(true);
+            p.set_print_progress(false);
+            p.set_print_realtime(false);
+            p.set_print_special(false);
+            p.set_print_timestamps(false);
+            p.set_audio_ctx(audio_ctx(16_000));
+            let _ = state.full(p, &vec![0.0f32; 16_000]);
+        }
+        log::info!("speech model warm in {:?} ({})", t.elapsed(), gpu_name().unwrap_or_else(|| "CPU".into()));
         *g = Some((path.to_path_buf(), ctx));
         Ok(())
     }
