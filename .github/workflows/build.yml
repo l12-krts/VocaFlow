@@ -57,6 +57,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: linux-x64
     runs-on: ${{ matrix.platform }}
+    env:
+      # Windows: whisper.cpp's nested CMake builds exceed MAX_PATH under
+      # the default target/ path, so build in a short directory there.
+      # and build for the host triple (drops x86_64-pc-windows-msvc from
+      # every path).
+      TARGET_DIR: ${{ startsWith(matrix.platform, 'windows') && 'C:/t' || 'src-tauri/target' }}
+      TARGET_ARG: ${{ !startsWith(matrix.platform, 'windows') && format('--target {0}', matrix.target) || '' }}
+      BUNDLE_DIR: ${{ startsWith(matrix.platform, 'windows') && 'C:/t/release/bundle' || format('src-tauri/target/{0}/release/bundle', matrix.target) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -103,14 +111,15 @@ jobs:
           # instead of -march=native on the CI machine, which could emit
           # AVX-512 and crash on users' CPUs.
           SOURCE_DATE_EPOCH: "1764000000"
-        run: npm run tauri build -- --target ${{ matrix.target }}
+          CARGO_TARGET_DIR: ${{ env.TARGET_DIR }}
+        run: npm run tauri build -- ${{ env.TARGET_ARG }}
       - uses: actions/upload-artifact@v4
         with:
           name: VocaFlow-${{ matrix.name }}
           if-no-files-found: error
           path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            ${{ env.BUNDLE_DIR }}/dmg/*.dmg
+            ${{ env.BUNDLE_DIR }}/nsis/*.exe
+            ${{ env.BUNDLE_DIR }}/msi/*.msi
+            ${{ env.BUNDLE_DIR }}/appimage/*.AppImage
+            ${{ env.BUNDLE_DIR }}/deb/*.deb
