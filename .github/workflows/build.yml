@@ -79,6 +79,19 @@ jobs:
           install_runtime: true
           cache: true
           stripdown: true
+      # whisper.cpp's Vulkan shader generator is a nested CMake project that
+      # can't find the compiler under MSBuild: build with Ninja inside a
+      # Visual Studio developer environment instead.
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Ninja
+        if: runner.os == 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v5
+      - name: Use Ninja for CMake
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
       - run: npm ci
       - name: Fetch llama-server
         env:
