@@ -106,15 +106,16 @@ body,
  * the 9px radius stays round; three 18px elements are cheap to lay out.
  */
 .loader-blob {
-  animation: vf-travel 1.05s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+  animation: vf-travel 1.2s cubic-bezier(0.77, 0, 0.175, 1) infinite;
 }
+/* One tall bar at a time (Figma "Transcribing"), handed dot to dot. */
 @keyframes vf-travel {
   0%,
-  62%,
+  34%,
   100% {
     height: 18px;
   }
-  28% {
+  17% {
     height: 44px;
   }
 }

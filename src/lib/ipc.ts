@@ -47,6 +47,7 @@ export const api = {
   getSettings: () => call<Settings>('get_settings'),
   setSettings: (patch: Partial<Settings>) => call<Settings>('set_settings', { patch }),
   models: () => call<ModelsState>('models_state'),
+  accelerator: () => call<string | null>('accelerator'),
   retryDownload: () => call<void>('retry_download'),
   mics: () => call<MicDevice[]>('list_mics'),
   /** Start/stop streaming input level for the meter in settings/onboarding. */
@@ -59,6 +60,7 @@ export const api = {
   requestPermission: (kind: 'microphone' | 'accessibility') => call<void>('request_permission', { kind }),
   /** Suspend the global hotkey while the recorder captures a new one. */
   captureHotkey: (on: boolean) => call<void>('capture_hotkey', { on }),
+  hotkeyError: () => call<string | null>('hotkey_error'),
   /** Try the formatter on sample text (onboarding preview). */
   tryDictation: () => call<void>('try_dictation'),
   pillReady: () => call<void>('pill_ready'),

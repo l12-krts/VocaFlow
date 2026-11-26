@@ -70,6 +70,12 @@ pub fn set_settings(app: AppHandle, core: State<Arc<Core>>, patch: serde_json::V
     Ok(after)
 }
 
+/// The GPU dictation runs on, if any ("Intel(R) Iris(R) Xe Graphics").
+#[tauri::command]
+pub fn accelerator(core: State<Arc<Core>>) -> Option<String> {
+    core.gpu()
+}
+
 #[tauri::command]
 pub fn models_state(core: State<Arc<Core>>) -> ModelsState {
     core.models.state()
@@ -152,6 +158,12 @@ pub fn request_permission(app: AppHandle, kind: String) {
 #[tauri::command]
 pub fn capture_hotkey(app: AppHandle, on: bool) {
     crate::hotkey::suspend(&app, on);
+}
+
+/// Set when the saved shortcut is taken by another app.
+#[tauri::command]
+pub fn hotkey_error() -> Option<String> {
+    crate::hotkey::LAST_ERROR.lock().clone()
 }
 
 #[tauri::command]

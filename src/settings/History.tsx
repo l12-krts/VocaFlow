@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button as AriaButton } from 'react-aria-components';
-import { Button } from 'krts.ui';
+import { HoldButton } from 'krts.ui';
 import { PageTitle } from '../components/Row';
 import { api, events, on } from '../lib/ipc';
 import type { HistoryItem } from '../lib/types';
@@ -36,9 +36,9 @@ export function HistoryPage() {
       <PageTitle
         right={
           items.length > 0 && (
-            <Button size="xs" variant="ghost" onPress={() => api.clearHistory()}>
-              Clear
-            </Button>
+            <HoldButton size="sm" variant="danger" holdDuration={900} hint="Hold to clear" confirmedContent="Cleared" onConfirm={() => api.clearHistory()}>
+              Clear all
+            </HoldButton>
           )
         }
       >

@@ -13,14 +13,50 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_LAYERED,
 };
 
-/// Overlay styles: never activates, never in Alt+Tab, clicks pass through.
+/// Overlay window setup.
+///
+/// Tauri's transparent windows on Windows render through DirectComposition
+/// without a redirection bitmap. Making them layered (which is how
+/// click-through works) leaves them blank after the first repaint and makes
+/// DWM fall back to the legacy frame: the "Windows 7" outline. So overlays
+/// are never layered. They have no frame, border, corners or transitions,
+/// never take focus, and VocaFlow parks them off-screen while idle so they
+/// can't intercept clicks.
 pub fn make_overlay(hwnd: isize) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY,
+        DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, SWP_FRAMECHANGED, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+        WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_EX_WINDOWEDGE, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
+    };
     unsafe {
         let h = HWND(hwnd as _);
+        let style = GetWindowLongPtrW(h, GWL_STYLE);
+        let frame = (WS_CAPTION.0 | WS_THICKFRAME.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0 | WS_BORDER.0 | WS_DLGFRAME.0) as isize;
+        SetWindowLongPtrW(h, GWL_STYLE, (style & !frame) | WS_POPUP.0 as isize);
+
         let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
-        let add = (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0) as isize;
-        SetWindowLongPtrW(h, GWL_EXSTYLE, ex | add);
-        let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        let drop = (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_WINDOWEDGE.0 | WS_EX_CLIENTEDGE.0 | WS_EX_DLGMODALFRAME.0 | WS_EX_STATICEDGE.0) as isize;
+        SetWindowLongPtrW(h, GWL_EXSTYLE, (ex & !drop) | (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0) as isize);
+
+        let set = |attr, value: u32| {
+            let _ = DwmSetWindowAttribute(h, attr, &value as *const u32 as *const core::ffi::c_void, 4);
+        };
+        set(DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED.0 as u32);
+        set(DWMWA_TRANSITIONS_FORCEDISABLED, 1);
+        set(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND.0 as u32);
+        set(DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
+        let _ = SetWindowPos(h, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        raise(hwnd);
+    }
+}
+
+/// Topmost again without activating (the taskbar can end up above us).
+pub fn raise(hwnd: isize) {
+    unsafe {
+        let _ = SetWindowPos(HWND(hwnd as _), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }
 
@@ -124,4 +160,50 @@ pub fn capture() -> Context {
         }
     }
     c
+}
+
+/// Tie a child process to VocaFlow: when the app exits or crashes, the OS
+/// closes the job and kills the child with it.
+pub fn kill_with_parent(child: &std::process::Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    static JOB: once_cell::sync::OnceCell<isize> = once_cell::sync::OnceCell::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let Ok(job) = CreateJobObjectW(None, None) else { return 0 };
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let _ = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        job.0 as isize
+    });
+    if job != 0 {
+        unsafe {
+            let _ = AssignProcessToJobObject(HANDLE(job as _), HANDLE(child.as_raw_handle() as _));
+        }
+    }
+}
+
+/// With an Alt-based shortcut, Windows sees Alt pressed and released with
+/// nothing in between (the hotkey swallows the letter) and many apps open
+/// their menu bar, which then eats our paste. Tapping an unassigned virtual
+/// key while Alt is still down cancels that (AutoHotkey's "menu mask").
+pub fn mask_alt_menu() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY};
+    let key = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0xE8), wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() }, time: 0, dwExtraInfo: 0 },
+        },
+    };
+    unsafe {
+        SendInput(&[key(false), key(true)], std::mem::size_of::<INPUT>() as i32);
+    }
 }

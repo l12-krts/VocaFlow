@@ -133,6 +133,14 @@ pub use crate::platform::windows::capture as capture_platform;
 #[cfg(target_os = "linux")]
 pub use crate::platform::linux::capture as capture_platform;
 
+/// The focused window's bounds only: fast enough to run before the pill
+/// appears (no accessibility round-trips).
+pub fn focused_window() -> Option<Rect> {
+    active_win_pos_rs::get_active_window()
+        .ok()
+        .map(|w| Rect { x: w.position.x, y: w.position.y, w: w.position.width, h: w.position.height })
+}
+
 /// Snapshot the focused app and field. Never fails; missing pieces stay empty.
 pub fn capture() -> Context {
     let mut c = capture_platform();

@@ -46,14 +46,14 @@ function PillApp() {
       if (inTauri && platform.os === 'macos') {
         import('@tauri-apps/api/core').then(({ invoke }) =>
           invoke('pill_shape', {
-            width,
-            visible: state.phase !== 'idle',
+            width: Math.max(width, 72),
+            visible: width > 0,
             reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
           }),
         );
       }
     },
-    [platform.os, state.phase],
+    [platform.os],
   );
 
   return (

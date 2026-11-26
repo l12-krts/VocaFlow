@@ -9,7 +9,6 @@ mod hotkey;
 mod insert;
 mod models;
 mod platform;
-mod qwen2;
 mod settings;
 mod stt;
 mod ui;
@@ -33,6 +32,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::models_state,
+            commands::accelerator,
             commands::retry_download,
             commands::list_mics,
             commands::mic_meter,
@@ -43,6 +43,7 @@ pub fn run() {
             commands::permissions,
             commands::request_permission,
             commands::capture_hotkey,
+            commands::hotkey_error,
             commands::pill_ready,
             commands::pill_shape,
             commands::main_ready,
@@ -57,7 +58,8 @@ pub fn run() {
             let handle = app.handle().clone();
             let config = app.path().app_config_dir()?;
             let data = app.path().app_data_dir()?;
-            let core = Core::new(handle.clone(), config, data);
+            let llama = app.path().resource_dir().map(|d| d.join("llama")).unwrap_or_default();
+            let core = Core::new(handle.clone(), config, data, llama);
             app.manage(core.clone());
 
             let st = core.settings();
@@ -84,13 +86,15 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building VocaFlow")
-        .run(|_app, event| {
+        .run(|app, event| match event {
             // Stay alive in the tray when Settings closes.
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
+            tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => api.prevent_exit(),
+            tauri::RunEvent::Exit => {
+                if let Some(core) = app.try_state::<Arc<Core>>() {
+                    core.shutdown();
                 }
             }
+            _ => {}
         });
 }
 
@@ -172,7 +176,7 @@ pub mod e2e {
             let path = m.speech_path(q);
             let t = Instant::now();
             eng.warm(&path)?;
-            eprintln!("stt load {:?}", t.elapsed());
+            eprintln!("stt load {:?} on {:?}", t.elapsed(), stt::gpu_name());
             let t = Instant::now();
             let tr = eng.transcribe(&path, &audio, &stt::Request { language: "auto", preferred: &["en".into(), "el".into()], dictionary: &["VocaFlow".into()], quality: q })?;
             println!("RAW [{}] ({:?}): {}", tr.language, t.elapsed(), tr.text);
@@ -181,10 +185,11 @@ pub mod e2e {
         struct Tr { text: String }
         let tr = Tr { text };
         let f = formatter::Formatter::new();
+        f.configure(std::env::var_os("VOCAFLOW_LLAMA_DIR").map(Into::into).unwrap_or_default(), std::env::temp_dir().join("vocaflow-formatter.log"));
         if format {
             let t = Instant::now();
-            f.warm(&m.path(models::FORMATTER[0].file), &m.path(models::FORMATTER[1].file))?;
-            eprintln!("formatter load {:?}", t.elapsed());
+            f.warm(&m.path(models::FORMATTER[0].file))?;
+            eprintln!("formatter load {:?} on {:?}", t.elapsed(), f.gpu.lock().clone());
         }
         for (app, title, before) in contexts {
             let ctx = Context { app: app.to_string(), title: title.to_string(), before: before.to_string(), ..Default::default() };

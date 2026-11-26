@@ -63,25 +63,27 @@ pub struct Core {
     stt: Engine,
     formatter: Formatter,
     session: Mutex<Option<Session>>,
-    phase: Mutex<Phase>,
+    phase: Arc<Mutex<Phase>>,
     meter: Mutex<Option<Capture>>,
     /// Bumped on every new state so delayed "back to idle" never clobbers
     /// a newer dictation.
-    epoch: Mutex<u64>,
+    epoch: Arc<Mutex<u64>>,
 }
 
 impl Core {
-    pub fn new(app: AppHandle, config_dir: std::path::PathBuf, data_dir: std::path::PathBuf) -> Arc<Self> {
+    pub fn new(app: AppHandle, config_dir: std::path::PathBuf, data_dir: std::path::PathBuf, llama_dir: std::path::PathBuf) -> Arc<Self> {
+        let formatter = Formatter::new();
+        formatter.configure(llama_dir, data_dir.join("formatter.log"));
         Arc::new(Self {
             settings: Mutex::new(Store::load(config_dir.clone())),
             models: Models::new(data_dir.join("models")),
             history: Mutex::new(History::load(data_dir)),
             stt: Engine::new(),
-            formatter: Formatter::new(),
+            formatter,
             session: Mutex::new(None),
-            phase: Mutex::new(Phase::Idle),
+            phase: Arc::new(Mutex::new(Phase::Idle)),
             meter: Mutex::new(None),
-            epoch: Mutex::new(0),
+            epoch: Arc::new(Mutex::new(0)),
             app,
         })
     }
@@ -90,9 +92,26 @@ impl Core {
         self.settings.lock().value.clone()
     }
 
+    fn phase_handle(&self) -> (Arc<Mutex<Phase>>, Arc<Mutex<u64>>) {
+        (self.phase.clone(), self.epoch.clone())
+    }
+
     fn emit_pill(&self, phase: Phase, hands_free: bool, format: Option<&str>, message: Option<&str>) {
         *self.phase.lock() = phase;
         *self.epoch.lock() += 1;
+        if phase == Phase::Idle && cfg!(target_os = "windows") {
+            // Park the overlays once the close animation has played.
+            let app = self.app.clone();
+            let epoch = *self.epoch.lock();
+            let me_phase = self.phase_handle();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1200));
+                if me_phase.0.lock().eq(&Phase::Idle) && *me_phase.1.lock() == epoch {
+                    ui::park(&app, "pill");
+                    ui::park(&app, "fx");
+                }
+            });
+        }
         let _ = self.app.emit_to(
             "pill",
             "pill://state",
@@ -160,8 +179,9 @@ impl Core {
     }
 
     fn start(self: &Arc<Self>) {
+        // Hold-vs-tap is timed from the key press itself.
+        let pressed_at = Instant::now();
         let st = self.settings();
-        log::info!("dictation start");
         // Make sure there's a model before opening the mic.
         if self.models.usable_speech(st.quality).is_none() {
             let msg = match self.models.speech.lock().clone() {
@@ -176,9 +196,10 @@ impl Core {
         if let Some(m) = self.meter.lock().take() {
             m.cancel();
         }
-        let ctx = context::capture();
-        log::debug!("context: app={:?} title={:?} role={:?}", ctx.app, ctx.title, ctx.role);
-        ui::place_pill(&self.app, ctx.window);
+        // The pill must appear the instant the key goes down, so only the
+        // cheap lookup (which screen?) happens before it; reading the field
+        // through the accessibility APIs runs in parallel below.
+        ui::place_pill(&self.app, context::focused_window());
         let capture = match Capture::start(st.mic_id.as_deref(), true) {
             Ok(c) => c,
             Err(e) => {
@@ -187,10 +208,22 @@ impl Core {
                 return;
             }
         };
-        *self.session.lock() = Some(Session { capture, pressed_at: Instant::now(), hands_free: false, ctx });
+        *self.session.lock() = Some(Session { capture, pressed_at, hands_free: false, ctx: Context::default() });
         self.emit_pill(Phase::Listening, false, None, None);
+        log::info!("listening after {:?}", pressed_at.elapsed());
         crate::hotkey::set_escape(&self.app, true);
         self.spawn_level_pump();
+
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let ctx = context::capture();
+            log::debug!("context: app={:?} title={:?} role={:?}", ctx.app, ctx.title, ctx.role);
+            if let Some(s) = me.session.lock().as_mut() {
+                if s.pressed_at == pressed_at {
+                    s.ctx = ctx;
+                }
+            }
+        });
     }
 
     /// Stream mic level to the pill (~30 fps) and watch for silence in
@@ -266,6 +299,16 @@ impl Core {
         // Loaded and warmed in the background by `sync_models`; never load
         // a 1 GB model in the middle of a dictation.
         let formatter_ready = st.formatting && self.formatter.is_loaded();
+        if st.formatting && !formatter_ready && self.models.has_formatter() {
+            // The server exited (driver reset, killed): bring it back for
+            // next time; this dictation uses the rules.
+            let me = self.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = me.formatter.warm(&me.models.path(models::FORMATTER[0].file)) {
+                    log::error!("restart formatter: {e:#}");
+                }
+            });
+        }
         if formatter_ready && formatter::worth_formatting(&raw, kind) {
             self.emit_pill(Phase::Formatting, false, Some(kind.label()), None);
             let fmt = || -> anyhow::Result<Option<String>> {
@@ -354,7 +397,7 @@ impl Core {
                 if me.models.has_formatter() {
                     let me2 = me.clone();
                     let _ = tauri::async_runtime::spawn_blocking(move || {
-                        let r = me2.formatter.warm(&me2.models.path(models::FORMATTER[0].file), &me2.models.path(models::FORMATTER[1].file));
+                        let r = me2.formatter.warm(&me2.models.path(models::FORMATTER[0].file));
                         if let Err(e) = r {
                             log::error!("warm formatter: {e:#}");
                         }
@@ -367,6 +410,16 @@ impl Core {
             self.models.pause_formatter();
             self.emit_models();
         }
+    }
+
+    /// Stop child processes before the app exits.
+    pub fn shutdown(&self) {
+        self.formatter.unload();
+    }
+
+    /// Accelerator in use, for Settings ("Intel(R) Iris(R) Xe Graphics").
+    pub fn gpu(&self) -> Option<String> {
+        stt::gpu_name().or_else(|| self.formatter.gpu.lock().clone())
     }
 
     pub fn quality_changed(self: &Arc<Self>) {

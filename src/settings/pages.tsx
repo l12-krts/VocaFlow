@@ -74,13 +74,27 @@ export function GeneralPage({ s, update }: { s: Settings; update: Update }) {
   );
 }
 
+/** "Intel(R) Iris(R) Xe Graphics" → "Intel Iris Xe Graphics" */
+function prettyGpu(name: string) {
+  return name.replace(/\((R|TM|tm|r)\)/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function useAccelerator() {
+  const [gpu, setGpu] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    api.accelerator().then(setGpu);
+  }, []);
+  return gpu === undefined ? null : gpu ? prettyGpu(gpu) : 'CPU';
+}
+
 export function DictationPage({ s, update, models }: { s: Settings; update: Update; models: ModelsState | null }) {
   const available = LANGUAGES.filter((l) => !s.preferredLanguages.includes(l.code));
+  const accel = useAccelerator();
   return (
     <>
       <PageTitle>Dictation</PageTitle>
       <Group>
-        <Row label="Accuracy" info="Higher is slower, more precise" stack>
+        <Row label="Accuracy" info="Higher is slower, more precise" stack aside={accel}>
           <div className="px-1">
             <AccuracySlider value={s.quality} onChange={(quality) => update({ quality })} />
           </div>

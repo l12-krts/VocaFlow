@@ -64,6 +64,10 @@ export function HotkeyRecorder({
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  // The saved shortcut may have been taken by another app since last run.
+  useEffect(() => {
+    api.hotkeyError().then((e) => e && setError(e));
+  }, []);
 
   useEffect(() => {
     if (!recording) return;

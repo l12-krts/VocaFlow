@@ -8,6 +8,7 @@ export function Row({
   children,
   stack = false,
   id,
+  aside,
 }: {
   label: ReactNode;
   info?: string;
@@ -15,6 +16,8 @@ export function Row({
   /** Put the control under the label (wide controls). */
   stack?: boolean;
   id?: string;
+  /** Quiet text on the label line (stacked rows). */
+  aside?: ReactNode;
 }) {
   return (
     <div
@@ -24,6 +27,7 @@ export function Row({
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="text-[14px] font-medium text-fg">{label}</span>
         {info && <Info>{info}</Info>}
+        {aside && <span className="ml-auto truncate pl-4 text-[12.5px] text-fg-subtle">{aside}</span>}
       </div>
       <div className={stack ? 'w-full' : 'flex shrink-0 items-center'}>{children}</div>
     </div>

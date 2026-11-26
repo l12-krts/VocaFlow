@@ -1,14 +1,39 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, events, on } from '../lib/ipc';
 
 /**
  * Live input level as 24 small bars. Values go straight to the DOM (no
  * React renders at 30 fps); bars fall slower than they rise like a VU meter.
  */
-export function LevelMeter({ active = true }: { active?: boolean }) {
-  const bars = useRef<HTMLDivElement>(null);
+/** True while this window is on screen and focused: the mic only opens then. */
+function useWindowActive() {
+  const [on, setOn] = useState(() => document.visibilityState === 'visible' && document.hasFocus());
   useEffect(() => {
-    if (!active) return;
+    const update = () => setOn(document.visibilityState === 'visible' && document.hasFocus());
+    window.addEventListener('focus', update);
+    window.addEventListener('blur', update);
+    document.addEventListener('visibilitychange', update);
+    return () => {
+      window.removeEventListener('focus', update);
+      window.removeEventListener('blur', update);
+      document.removeEventListener('visibilitychange', update);
+    };
+  }, []);
+  return on;
+}
+
+export function LevelMeter({ active: wanted = true }: { active?: boolean }) {
+  const bars = useRef<HTMLDivElement>(null);
+  // Settings is hidden, not closed, when dismissed: never keep the mic open
+  // (and the OS "in use" indicator lit) for a meter nobody can see.
+  const windowActive = useWindowActive();
+  const active = wanted && windowActive;
+  useEffect(() => {
+    if (!active) {
+      const el = bars.current;
+      if (el) for (const c of Array.from(el.children)) (c as HTMLElement).dataset.on = '';
+      return;
+    }
     api.meter(true);
     let level = 0;
     let target = 0;

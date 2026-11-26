@@ -23,6 +23,25 @@ pub struct Transcript {
     pub language: String,
 }
 
+/// The GPU whisper.cpp will use, if any.
+pub fn gpu_name() -> Option<String> {
+    use whisper_rs::whisper_rs_sys as sys;
+    static NAME: once_cell::sync::OnceCell<Option<String>> = once_cell::sync::OnceCell::new();
+    NAME.get_or_init(|| unsafe {
+        for i in 0..sys::ggml_backend_dev_count() {
+            let dev = sys::ggml_backend_dev_get(i);
+            if sys::ggml_backend_dev_type(dev) == sys::ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU {
+                let d = sys::ggml_backend_dev_description(dev);
+                if !d.is_null() {
+                    return Some(std::ffi::CStr::from_ptr(d).to_string_lossy().trim().to_string());
+                }
+            }
+        }
+        None
+    })
+    .clone()
+}
+
 fn threads() -> i32 {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8) as i32
 }
@@ -40,7 +59,9 @@ impl Engine {
         }
         *g = None; // free the old model before loading a large new one
         let mut params = WhisperContextParameters::default();
-        params.use_gpu(cfg!(target_os = "macos"));
+        // Metal on macOS, Vulkan elsewhere. whisper.cpp falls back to the
+        // CPU by itself when there's no usable GPU.
+        params.use_gpu(true);
         params.flash_attn(cfg!(target_os = "macos"));
         let ctx = WhisperContext::new_with_params(&path.to_string_lossy(), params)
             .map_err(|e| anyhow!("Couldn't load the speech model ({e})"))?;
@@ -64,10 +85,13 @@ impl Engine {
             detect(&mut state, audio, req.preferred, n as usize).unwrap_or_else(|| "en".into())
         };
 
-        let strategy = match req.quality {
-            Quality::Low | Quality::Medium => SamplingStrategy::Greedy { best_of: 1 },
-            Quality::High => SamplingStrategy::BeamSearch { beam_size: 3, patience: -1.0 },
-            Quality::Ultra => SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 },
+        // Beam search buys a little accuracy for a lot of compute: worth it
+        // on a GPU, not on a laptop CPU.
+        let gpu = gpu_name().is_some();
+        let strategy = match (req.quality, gpu) {
+            (Quality::Low | Quality::Medium, _) | (_, false) => SamplingStrategy::Greedy { best_of: 1 },
+            (Quality::High, true) => SamplingStrategy::BeamSearch { beam_size: 3, patience: -1.0 },
+            (Quality::Ultra, true) => SamplingStrategy::BeamSearch { beam_size: 5, patience: -1.0 },
         };
         let mut p = FullParams::new(strategy);
         p.set_n_threads(n);

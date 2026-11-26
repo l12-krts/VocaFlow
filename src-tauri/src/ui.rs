@@ -38,6 +38,10 @@ pub fn create_main(app: &AppHandle, visible: bool) -> tauri::Result<WebviewWindo
         if let tauri::WindowEvent::CloseRequested { api, .. } = e {
             api.prevent_close();
             let _ = w2.hide();
+            // The level meter's mic must not outlive the window.
+            if let Some(core) = w2.app_handle().try_state::<std::sync::Arc<crate::core::Core>>() {
+                core.meter(false);
+            }
         }
     });
     let _ = visible;
@@ -92,22 +96,45 @@ pub fn create_overlays(app: &AppHandle) -> tauri::Result<()> {
             }
         })?;
     }
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(h) = pill.hwnd() {
-            crate::platform::windows::make_overlay(h.0 as isize);
-        }
-        if let Ok(h) = fx.hwnd() {
-            crate::platform::windows::make_overlay(h.0 as isize);
-        }
-    }
     place_pill(app, None);
     let _ = pill.show();
     let _ = fx.show();
-    // Clicks pass straight through to the apps underneath.
-    let _ = pill.set_ignore_cursor_events(true);
-    let _ = fx.set_ignore_cursor_events(true);
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Clicks pass straight through to the apps underneath.
+        let _ = pill.set_ignore_cursor_events(true);
+        let _ = fx.set_ignore_cursor_events(true);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // See platform::windows::make_overlay: no layered click-through on
+        // Windows; overlays wait off-screen instead.
+        for w in [&pill, &fx] {
+            if let Ok(h) = w.hwnd() {
+                crate::platform::windows::make_overlay(h.0 as isize);
+            }
+        }
+        park(app, "pill");
+        park(app, "fx");
+    }
     Ok(())
+}
+
+/// Windows only: move an idle overlay off-screen so it can never block a
+/// click. (macOS and Linux overlays are click-through instead.)
+pub fn park(app: &AppHandle, label: &str) {
+    #[cfg(target_os = "windows")]
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.set_position(PhysicalPosition::new(-20000, -20000));
+    }
+    let _ = (app, label);
+}
+
+#[cfg(target_os = "windows")]
+fn raise(w: &WebviewWindow) {
+    if let Ok(h) = w.hwnd() {
+        crate::platform::windows::raise(h.0 as isize);
+    }
 }
 
 /// Bottom-centre of the screen the user is working on, just above the
@@ -135,6 +162,8 @@ pub fn place_pill(app: &AppHandle, anchor: Option<Rect>) {
     let y = wa.position.y + wa.size.height as i32 - size.height as i32;
     let _ = pill.set_size(LogicalSize::new(PILL_W, PILL_H));
     let _ = pill.set_position(PhysicalPosition::new(x, y));
+    #[cfg(target_os = "windows")]
+    raise(&pill);
 }
 
 /// Move the shimmer overlay over the line where text is being inserted,
@@ -159,6 +188,8 @@ pub fn place_fx(app: &AppHandle, caret: Option<Rect>, chars: usize) -> Option<(f
         // Caret rects are physical pixels here; the font scales with DPI.
         let _ = fx.set_size(PhysicalSize::new((width + pad * 2.0 * scale) as u32, (line_h + pad * 2.0 * scale) as u32));
         let _ = fx.set_position(PhysicalPosition::new((c.x - pad * scale) as i32, (c.y - pad * scale) as i32));
+        #[cfg(target_os = "windows")]
+        raise(&fx);
         Some((width / scale, line_h / scale))
     }
 }

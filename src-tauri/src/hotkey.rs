@@ -10,6 +10,8 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 static CURRENT: Mutex<Option<Shortcut>> = Mutex::new(None);
+/// Why the saved shortcut couldn't be registered at launch, for Settings.
+pub static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static DOWN: Mutex<bool> = Mutex::new(false);
 
 enum Edge {
@@ -66,6 +68,10 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                     *d = true;
                     drop(d);
                     log::debug!("hotkey down");
+                    #[cfg(target_os = "windows")]
+                    if shortcut.mods.contains(tauri_plugin_global_shortcut::Modifiers::ALT) {
+                        crate::platform::windows::mask_alt_menu();
+                    }
                     dispatch(core, Edge::Press);
                 }
                 ShortcutState::Released => {
@@ -99,9 +105,11 @@ pub fn register(app: &AppHandle, accel: &str) -> Result<()> {
         Ok(()) => {
             log::info!("dictation shortcut: {accel}");
             *CURRENT.lock() = Some(next);
+            *LAST_ERROR.lock() = None;
             Ok(())
         }
         Err(e) => {
+            *LAST_ERROR.lock() = Some("Taken by another app".into());
             if let Some(p) = prev {
                 if gs.register(p).is_ok() {
                     *CURRENT.lock() = Some(p);

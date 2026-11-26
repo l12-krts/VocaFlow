@@ -83,6 +83,8 @@ export const mockBackend = {
         if (qualityChanged) startDownloadSim();
         return settings as T;
       }
+      case 'accelerator':
+        return (params.get('gpu') ?? 'Intel(R) Iris(R) Xe Graphics') as T;
       case 'models_state':
         return models as T;
       case 'list_mics':

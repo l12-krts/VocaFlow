@@ -1,51 +1,38 @@
-//! Context-aware formatting with a small local model (Qwen2.5 1.5B Instruct,
-//! Q4_K_M GGUF) on candle. The model only sees what the cleanup rules
-//! can't handle: tone, structure, self-corrections. Its output is checked
-//! and falls back to the rules-only text if it drifts.
+//! Context-aware formatting with a small local model (Qwen2.5 1.5B
+//! Instruct, Q4_K_M) served by a bundled `llama-server` on the GPU: Vulkan
+//! on Windows and Linux (Intel, AMD, NVIDIA), Metal on macOS.
+//!
+//! It runs as a child process rather than in-process because whisper.cpp
+//! and llama.cpp each embed their own ggml, which can't be linked twice. A
+//! separate process also keeps the 1 GB model's memory out of the app and
+//! is cleaned up by the OS if VocaFlow ever dies.
+//!
+//! The model only does what rules can't (structure and tone); its output
+//! is checked and falls back to the rules-only text if it drifts.
 
 use crate::cleanup;
 use crate::context::{Context, Kind};
-use anyhow::{anyhow, Result};
-use candle_core::{quantized::gguf_file, Device, Tensor};
-use candle_transformers::generation::{LogitsProcessor, Sampling};
-use crate::qwen2::ModelWeights;
-use std::collections::HashMap;
+use anyhow::{anyhow, Context as _, Result};
 use parking_lot::Mutex;
-use std::path::Path;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokenizers::Tokenizer;
 
-struct Loaded {
-    model: ModelWeights,
-    tok: Tokenizer,
-    device: Device,
-    eos: Vec<u32>,
-    /// Model state after the fixed part of the prompt (system + example)
-    /// for each target, and its length in tokens. Cloning is cheap: weights
-    /// and cache tensors are shared, so each dictation only pays for its
-    /// own words.
-    prefixes: HashMap<&'static str, (ModelWeights, usize)>,
-}
-
-const ALL_KINDS: [Kind; 7] = [Kind::Email, Kind::Chat, Kind::Generic, Kind::Document, Kind::Post, Kind::Commit, Kind::Code];
-
-impl Loaded {
-    fn prefix(&mut self, kind: Kind) -> Result<(ModelWeights, usize)> {
-        let key = kind.label_key();
-        if let Some((m, n)) = self.prefixes.get(key) {
-            return Ok((m.clone(), *n));
-        }
-        let ids = self.tok.encode(prefix_text(kind), false).map_err(|e| anyhow!("{e}"))?.get_ids().to_vec();
-        let mut m = self.model.clone();
-        let input = Tensor::new(ids.as_slice(), &self.device)?.unsqueeze(0)?;
-        m.forward(&input, 0)?;
-        self.prefixes.insert(key, (m.clone(), ids.len()));
-        Ok((m, ids.len()))
-    }
+struct Server {
+    child: Child,
+    port: u16,
+    key: String,
 }
 
 pub struct Formatter {
-    loaded: Mutex<Option<Loaded>>,
+    server: Mutex<Option<Server>>,
+    /// Folder holding llama-server and its libraries.
+    dir: Mutex<Option<PathBuf>>,
+    log: Mutex<Option<PathBuf>>,
+    /// GPU the server reported, e.g. "Intel(R) Iris(R) Xe Graphics".
+    pub gpu: Arc<Mutex<Option<String>>>,
 }
 
 const RULES: &str = "You rewrite dictated speech into the exact text the speaker meant to type, formatted for where it is going.
@@ -137,6 +124,7 @@ fn suffix_text(raw: &str, ctx: &Context) -> String {
     format!("{}<|im_end|>\n<|im_start|>assistant\n", user_message(&where_label(ctx), "", raw))
 }
 
+#[allow(dead_code)]
 impl Kind {
     fn label_key(self) -> &'static str {
         match self {
@@ -153,97 +141,244 @@ impl Kind {
 
 impl Formatter {
     pub fn new() -> Self {
-        Self { loaded: Mutex::new(None) }
+        Self { server: Mutex::new(None), dir: Mutex::new(None), log: Mutex::new(None), gpu: Arc::new(Mutex::new(None)) }
+    }
+
+    /// Where the bundled server lives, and where its log goes.
+    pub fn configure(&self, dir: PathBuf, log: PathBuf) {
+        *self.dir.lock() = Some(dir);
+        *self.log.lock() = Some(log);
     }
 
     pub fn is_loaded(&self) -> bool {
-        self.loaded.lock().is_some()
+        let mut g = self.server.lock();
+        match g.as_mut() {
+            Some(s) => matches!(s.child.try_wait(), Ok(None)),
+            None => false,
+        }
     }
 
     pub fn unload(&self) {
-        *self.loaded.lock() = None;
+        if let Some(mut s) = self.server.lock().take() {
+            let _ = s.child.kill();
+            let _ = s.child.wait();
+        }
     }
 
-    pub fn warm(&self, model: &Path, tokenizer: &Path) -> Result<()> {
+    fn binary(&self) -> Option<PathBuf> {
+        let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+        if let Some(p) = std::env::var_os("VOCAFLOW_LLAMA_SERVER").map(PathBuf::from).filter(|p| p.is_file()) {
+            return Some(p);
+        }
+        if let Some(p) = self.dir.lock().as_ref().map(|d| d.join(exe)).filter(|p| p.is_file()) {
+            return Some(p);
+        }
+        std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(exe)).find(|p| p.is_file()))
+    }
+
+    /// Start the server with the model and wait until it answers.
+    pub fn warm(&self, model: &Path) -> Result<()> {
+        if self.is_loaded() {
+            return Ok(());
+        }
+        self.unload();
+        let bin = self.binary().ok_or_else(|| anyhow!("llama-server not found"))?;
+        let dir = bin.parent().map(Path::to_path_buf).unwrap_or_default();
+        let port = free_port()?;
+        let key = format!("{:032x}", rand::random::<u128>());
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).div_ceil(2).max(2);
+
+        let mut cmd = Command::new(&bin);
+        cmd.arg("-m").arg(model)
+            .args(["--host", "127.0.0.1", "--port", &port.to_string(), "--api-key", &key])
+            // Every layer on the GPU; ignored when there's no GPU backend.
+            .args(["-ngl", "999"])
+            // Dictations are short: a 2k context keeps the KV cache small.
+            .args(["-c", "2048", "-np", "1", "-t", &threads.to_string()])
+            .args(["--no-webui", "--cache-reuse", "256"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        // The server's own libraries sit next to it.
+        #[cfg(target_os = "linux")]
+        cmd.env("LD_LIBRARY_PATH", join_env("LD_LIBRARY_PATH", &dir));
+        #[cfg(target_os = "macos")]
+        cmd.env("DYLD_LIBRARY_PATH", join_env("DYLD_LIBRARY_PATH", &dir));
+        #[cfg(windows)]
         {
-            let mut g = self.loaded.lock();
-            if g.is_some() {
-                return Ok(());
-            }
-            let device = pick_device();
-            let mut file = std::fs::File::open(model)?;
-            let content = gguf_file::Content::read(&mut file).map_err(|e| anyhow!("formatter model: {e}"))?;
-            let model = ModelWeights::from_gguf(content, &mut file, &device)?;
-            let tok = Tokenizer::from_file(tokenizer).map_err(|e| anyhow!("tokenizer: {e}"))?;
-            let eos = ["<|im_end|>", "<|endoftext|>"].iter().filter_map(|t| tok.token_to_id(t)).collect();
-            *g = Some(Loaded { model, tok, device, eos, prefixes: HashMap::new() });
+            use std::os::windows::process::CommandExt;
+            cmd.env("PATH", join_env("PATH", &dir));
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        // Pre-compute each target's prompt prefix so the first dictation
-        // into any app is as fast as the hundredth. One at a time, releasing
-        // the lock in between, so a dictation never waits for all of them.
-        let t = Instant::now();
-        for k in ALL_KINDS {
-            let mut g = self.loaded.lock();
-            if let Some(l) = g.as_mut() {
-                if let Err(e) = l.prefix(k) {
-                    log::warn!("formatter prefix {k:?}: {e:#}");
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            // Die with VocaFlow, even if it crashes.
+            cmd.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                Ok(())
+            });
+        }
+        let mut child = spawn(cmd).with_context(|| format!("start {}", bin.display()))?;
+        #[cfg(windows)]
+        crate::platform::windows::kill_with_parent(&child);
+
+        // Keep a log for support, and pick up which GPU it chose.
+        if let Some(stderr) = child.stderr.take() {
+            let log = self.log.lock().clone();
+            let gpu = self.gpu.clone();
+            std::thread::spawn(move || {
+                let mut file = log.and_then(|p| std::fs::File::create(p).ok());
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if let Some(f) = file.as_mut() {
+                        let _ = writeln!(f, "{line}");
+                    }
+                    if let Some(name) = gpu_from_log(&line) {
+                        gpu.lock().get_or_insert(name);
+                    }
                 }
-            }
+            });
         }
-        log::info!("formatter prefixes ready in {:?}", t.elapsed());
+
+        let client = reqwest::blocking::Client::builder().no_proxy().timeout(Duration::from_secs(2)).build()?;
+        let started = Instant::now();
+        loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Err(anyhow!("llama-server exited ({status})"));
+            }
+            let ok = client
+                .get(format!("http://127.0.0.1:{port}/health"))
+                .bearer_auth(&key)
+                .send()
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if ok {
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(180) {
+                let _ = child.kill();
+                return Err(anyhow!("llama-server did not become ready"));
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        log::info!("formatter ready in {:?} on {}", started.elapsed(), self.gpu.lock().clone().unwrap_or_else(|| "CPU".into()));
+        *self.server.lock() = Some(Server { child, port, key });
+
+        // Prime the prompt cache with the most common target so the first
+        // email is as fast as the tenth.
+        let _ = self.complete(&prefix_text(Kind::Email), 1, Duration::from_secs(30));
         Ok(())
     }
 
-    /// Format `raw` for the field described by `ctx`. Returns None if the
-    /// model output failed the sanity checks (the caller uses rules only).
-    pub fn format(&self, raw: &str, kind: Kind, ctx: &Context, budget: Duration) -> Result<Option<String>> {
-        // Busy warming up: don't make the user wait, the rules are fine.
-        let Some(mut g) = self.loaded.try_lock_for(Duration::from_secs(3)) else {
-            log::warn!("formatter busy, using rules");
-            return Ok(None);
+    fn complete(&self, prompt: &str, n_predict: usize, budget: Duration) -> Result<Option<String>> {
+        let (port, key) = {
+            let g = self.server.lock();
+            let s = g.as_ref().ok_or_else(|| anyhow!("formatter not running"))?;
+            (s.port, s.key.clone())
         };
-        let l = g.as_mut().ok_or_else(|| anyhow!("formatter not loaded"))?;
-        let (mut model, plen) = l.prefix(kind)?;
-        let enc = l.tok.encode(suffix_text(raw, ctx), false).map_err(|e| anyhow!("{e}"))?;
-        let prompt_ids = enc.get_ids().to_vec();
-        let raw_tokens = l.tok.encode(raw, false).map(|e| e.len()).unwrap_or(raw.len() / 3);
-        let max_new = (raw_tokens * 2 + 48).min(700);
-
-        let started = Instant::now();
-        let mut logits_p = LogitsProcessor::from_sampling(0, Sampling::ArgMax);
-        let input = Tensor::new(prompt_ids.as_slice(), &l.device)?.unsqueeze(0)?;
-        let logits = model.forward(&input, plen)?.squeeze(0)?;
-        let mut next = logits_p.sample(&logits)?;
-        log::info!("formatter prefill: {} tokens in {:?}", prompt_ids.len(), started.elapsed());
-        let mut out: Vec<u32> = vec![];
-        let mut pos = plen + prompt_ids.len();
-        while !l.eos.contains(&next) && out.len() < max_new {
-            out.push(next);
-            if started.elapsed() > budget {
-                log::warn!("formatter over budget, falling back");
+        let client = reqwest::blocking::Client::builder().no_proxy().timeout(budget + Duration::from_secs(2)).build()?;
+        let body = serde_json::json!({
+            "prompt": prompt,
+            "n_predict": n_predict,
+            "temperature": 0.0,
+            "top_k": 1,
+            "repeat_penalty": 1.08,
+            "repeat_last_n": 64,
+            "cache_prompt": true,
+            "stop": ["<|im_end|>", "<|endoftext|>"],
+            "t_max_predict_ms": budget.as_millis() as u64,
+            "stream": false,
+        });
+        let resp = match client.post(format!("http://127.0.0.1:{port}/completion")).bearer_auth(&key).json(&body).send() {
+            Ok(r) => r,
+            Err(e) if e.is_timeout() => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let v: serde_json::Value = resp.error_for_status()?.json()?;
+        // Cut short by the time limit: don't paste half a sentence.
+        if v.get("stop_type").and_then(|s| s.as_str()) == Some("limit") || v.get("stopped_limit").and_then(|b| b.as_bool()) == Some(true) {
+            if v.get("timings").and_then(|t| t.get("predicted_ms")).and_then(|m| m.as_f64()).unwrap_or(0.0) >= budget.as_millis() as f64 * 0.95 {
                 return Ok(None);
             }
-            let input = Tensor::new(&[next], &l.device)?.unsqueeze(0)?;
-            let logits = model.forward(&input, pos)?.squeeze(0)?;
-            // Gentle repeat penalty over the recent window: small models
-            // occasionally loop on lists.
-            let start = out.len().saturating_sub(64);
-            let logits = candle_transformers::utils::apply_repeat_penalty(&logits, 1.08, &out[start..])?;
-            next = logits_p.sample(&logits)?;
-            pos += 1;
         }
-        let text = l.tok.decode(&out, true).map_err(|e| anyhow!("{e}"))?;
-        log::info!("formatter: {} tokens in {:?}", out.len(), started.elapsed());
+        Ok(v.get("content").and_then(|c| c.as_str()).map(str::to_string))
+    }
+
+    /// Format `raw` for the field described by `ctx`. Returns None if the
+    /// model is unavailable, too slow, or its output failed the checks.
+    pub fn format(&self, raw: &str, kind: Kind, ctx: &Context, budget: Duration) -> Result<Option<String>> {
+        let started = Instant::now();
+        let prompt = format!("{}{}", prefix_text(kind), suffix_text(raw, ctx));
+        let words = raw.split_whitespace().count();
+        let max_new = (words * 3 + 48).min(700);
+        let Some(text) = self.complete(&prompt, max_new, budget)? else {
+            log::warn!("formatter over budget, using rules");
+            return Ok(None);
+        };
+        log::info!("formatter: {:?}", started.elapsed());
         Ok(accept(raw, &text, kind, ctx))
     }
 }
 
-fn pick_device() -> Device {
-    #[cfg(target_os = "macos")]
-    if let Ok(d) = Device::new_metal(0) {
-        return d;
+impl Drop for Formatter {
+    fn drop(&mut self) {
+        self.unload();
     }
-    Device::Cpu
+}
+
+/// Linux delivers the parent-death signal when the *thread* that spawned
+/// the child exits, not the process. Spawn from one thread that lives as
+/// long as the app, so the server dies with VocaFlow and not before.
+#[cfg(target_os = "linux")]
+fn spawn(cmd: Command) -> std::io::Result<Child> {
+    use std::sync::mpsc;
+    type Req = (Command, mpsc::Sender<std::io::Result<Child>>);
+    static OWNER: once_cell::sync::Lazy<Mutex<mpsc::Sender<Req>>> = once_cell::sync::Lazy::new(|| {
+        let (tx, rx) = mpsc::channel::<Req>();
+        std::thread::Builder::new()
+            .name("vf-child-owner".into())
+            .spawn(move || {
+                for (mut cmd, reply) in rx {
+                    let _ = reply.send(cmd.spawn());
+                }
+            })
+            .expect("child owner thread");
+        Mutex::new(tx)
+    });
+    let (tx, rx) = mpsc::channel();
+    OWNER.lock().send((cmd, tx)).map_err(|_| std::io::Error::other("spawner gone"))?;
+    rx.recv().map_err(|_| std::io::Error::other("spawner gone"))?
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn(mut cmd: Command) -> std::io::Result<Child> {
+    cmd.spawn()
+}
+
+fn free_port() -> Result<u16> {
+    let l = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(l.local_addr()?.port())
+}
+
+#[allow(dead_code)]
+fn join_env(var: &str, dir: &Path) -> std::ffi::OsString {
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(old) = std::env::var_os(var) {
+        paths.extend(std::env::split_paths(&old));
+    }
+    std::env::join_paths(paths).unwrap_or_default()
+}
+
+/// "ggml_vulkan: 0 = Intel(R) Iris(R) Xe Graphics (Intel Corporation) | uma: 1 …"
+/// or Metal's "… GPU name: Apple M2 Pro".
+fn gpu_from_log(line: &str) -> Option<String> {
+    if let Some(rest) = line.split("ggml_vulkan: 0 = ").nth(1) {
+        return Some(rest.split(" (").next().unwrap_or(rest).split(" |").next().unwrap_or(rest).trim().to_string());
+    }
+    if let Some(rest) = line.split("GPU name:").nth(1) {
+        return Some(rest.trim().to_string());
+    }
+    None
 }
 
 /// Sanity-check model output against the input and enforce house style.

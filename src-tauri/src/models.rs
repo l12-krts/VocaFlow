@@ -33,10 +33,8 @@ pub fn speech_spec(q: Quality) -> Spec {
     }
 }
 
-pub const FORMATTER: [Spec; 2] = [
-    Spec { file: "formatter.gguf", url: "/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf", size: 1_117_320_736 },
-    Spec { file: "formatter-tokenizer.json", url: "/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/tokenizer.json", size: 7_031_645 },
-];
+pub const FORMATTER: [Spec; 1] =
+    [Spec { file: "formatter.gguf", url: "/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf", size: 1_117_320_736 }];
 
 pub const ALL_QUALITIES: [Quality; 4] = [Quality::Low, Quality::Medium, Quality::High, Quality::Ultra];
 
@@ -67,6 +65,8 @@ pub struct Models {
 impl Models {
     pub fn new(dir: PathBuf) -> Arc<Self> {
         let _ = std::fs::create_dir_all(&dir);
+        // The GGUF carries its own tokenizer now.
+        let _ = std::fs::remove_file(dir.join("formatter-tokenizer.json"));
         // Leftovers from an interrupted download are useless after restart.
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {

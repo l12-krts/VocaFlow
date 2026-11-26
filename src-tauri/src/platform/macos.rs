@@ -102,25 +102,27 @@ unsafe fn animate(duration: f64, curve: [f32; 4], f: impl FnOnce()) {
 const EASE_OUT: [f32; 4] = [0.23, 1.0, 0.32, 1.0];
 const DRAWER: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
 
-/// Mirror the CSS pill: enter (scale .9 → 1, 220 ms ease-out), exit
-/// (scale .94, 160 ms), width morphs (420 ms drawer curve).
+/// Mirror the CSS pill (Pill.tsx): open as a circle that stretches to its
+/// width, morph between states, close by collapsing back into a circle.
 pub unsafe fn shape_glass(width: f64, visible: bool, reduced: bool) {
     let Some(g) = glass() else { return };
     let v = &*g.view;
     let proxy: *mut AnyObject = msg_send![v, animator];
     match (g.shown, visible) {
         (false, true) => {
-            let from = if reduced { rect_for(g.window_w, width, 1.0, 0.0) } else { rect_for(g.window_w, width, 0.9, -8.0) };
+            let from = if reduced { rect_for(g.window_w, width, 1.0, 0.0) } else { circle(g.window_w, 0.8, -10.0) };
             let _: () = msg_send![v, setFrame: from];
-            animate(if reduced { 0.12 } else { 0.22 }, EASE_OUT, || {
-                let _: () = msg_send![proxy, setFrame: rect_for(g.window_w, width, 1.0, 0.0)];
+            animate(if reduced { 0.12 } else { 0.16 }, EASE_OUT, || {
                 let _: () = msg_send![proxy, setAlphaValue: 1.0f64];
+            });
+            animate(if reduced { 0.0 } else { 0.5 }, DRAWER, || {
+                let _: () = msg_send![proxy, setFrame: rect_for(g.window_w, width, 1.0, 0.0)];
             });
         }
         (true, false) => {
-            animate(if reduced { 0.12 } else { 0.16 }, EASE_OUT, || {
+            animate(if reduced { 0.12 } else { 0.36 }, DRAWER, || {
                 if !reduced {
-                    let _: () = msg_send![proxy, setFrame: rect_for(g.window_w, g.width, 0.94, -4.0)];
+                    let _: () = msg_send![proxy, setFrame: circle(g.window_w, 0.82, -6.0)];
                 }
                 let _: () = msg_send![proxy, setAlphaValue: 0.0f64];
             });
@@ -136,6 +138,12 @@ pub unsafe fn shape_glass(width: f64, visible: bool, reduced: bool) {
     if visible {
         g.width = width;
     }
+}
+
+/// The closed shape: a PILL_H circle, scaled, centred where the pill sits.
+fn circle(window_w: f64, scale: f64, dy: f64) -> NSRect {
+    let d = PILL_H * scale;
+    NSRect::new(NSPoint::new((window_w - d) / 2.0, PILL_BOTTOM + (PILL_H - d) / 2.0 - dy), NSSize::new(d, d))
 }
 
 pub unsafe fn set_glass_dark(dark: bool) {
