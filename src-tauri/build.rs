@@ -11,5 +11,12 @@ fn main() {
             }
         }
     }
+    // whisper.cpp links Vulkan on Windows/Linux; let the linker find the
+    // SDK's copy when the system has none.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        if let Ok(sdk) = std::env::var("VULKAN_SDK") {
+            println!("cargo:rustc-link-search=native={sdk}/lib");
+        }
+    }
     tauri_build::build()
 }
