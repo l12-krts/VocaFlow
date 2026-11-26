@@ -9,6 +9,7 @@ mod hotkey;
 mod insert;
 mod models;
 mod platform;
+mod qwen2;
 mod settings;
 mod stt;
 mod ui;
@@ -75,7 +76,8 @@ pub fn run() {
             let background = std::env::args().any(|a| a == "--background");
             ui::create_main(&handle, !st.onboarded)?;
             if !st.onboarded || !background {
-                ui::show_main(&handle, None);
+                // Shown by `main_ready` once the page has painted.
+                ui::SHOW_WHEN_READY.store(true, std::sync::atomic::Ordering::SeqCst);
             }
             core.sync_models();
             Ok(())
@@ -107,10 +109,16 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let history = MenuItem::with_id(app, "history", "History", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit VocaFlow", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &history, &PredefinedMenuItem::separator(app)?, &quit])?;
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+    // macOS: monochrome template that adapts to the menu bar. Windows and
+    // Linux taskbars can be light or dark, so they get the colour mark.
+    let icon = if cfg!(target_os = "macos") {
+        tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?
+    } else {
+        tauri::image::Image::from_bytes(include_bytes!("../icons/64x64.png"))?
+    };
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("VocaFlow")
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "macos"))
@@ -153,16 +161,25 @@ pub mod e2e {
             rt.block_on(m.ensure_formatter(|s| eprint!("\r{:?}            ", s.formatter)));
             eprintln!("\nformatter ready");
         }
-        let samples = read_wav(wav)?;
-        let audio = audio::prepare(samples).ok_or_else(|| anyhow::anyhow!("no speech"))?;
-        let eng = stt::Engine::new();
-        let path = m.speech_path(q);
-        let t = Instant::now();
-        eng.warm(&path)?;
-        eprintln!("stt load {:?}", t.elapsed());
-        let t = Instant::now();
-        let tr = eng.transcribe(&path, &audio, &stt::Request { language: "auto", preferred: &["en".into(), "el".into()], dictionary: &["VocaFlow".into()], quality: q })?;
-        println!("RAW [{}] ({:?}): {}", tr.language, t.elapsed(), tr.text);
+        // `wav` may be a transcript instead ("text:..."), to test formatting
+        // with realistic Whisper output.
+        let text = if let Some(t) = wav.strip_prefix("text:") {
+            t.to_string()
+        } else {
+            let samples = read_wav(wav)?;
+            let audio = audio::prepare(samples).ok_or_else(|| anyhow::anyhow!("no speech"))?;
+            let eng = stt::Engine::new();
+            let path = m.speech_path(q);
+            let t = Instant::now();
+            eng.warm(&path)?;
+            eprintln!("stt load {:?}", t.elapsed());
+            let t = Instant::now();
+            let tr = eng.transcribe(&path, &audio, &stt::Request { language: "auto", preferred: &["en".into(), "el".into()], dictionary: &["VocaFlow".into()], quality: q })?;
+            println!("RAW [{}] ({:?}): {}", tr.language, t.elapsed(), tr.text);
+            tr.text
+        };
+        struct Tr { text: String }
+        let tr = Tr { text };
         let f = formatter::Formatter::new();
         if format {
             let t = Instant::now();
@@ -176,7 +193,7 @@ pub mod e2e {
             println!("\n== {app} / {title} -> {kind:?}\nRULES: {basic}");
             if format {
                 let t = Instant::now();
-                let out = f.format(&cleanup::spoken_punctuation(&tr.text), kind, &ctx, Duration::from_secs(60))?;
+                let out = f.format(&basic, kind, &ctx, Duration::from_secs(60))?;
                 println!("MODEL ({:?}):\n{}", t.elapsed(), out.unwrap_or_else(|| "<rejected>".into()));
             }
         }

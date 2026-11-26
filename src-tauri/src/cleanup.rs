@@ -68,6 +68,65 @@ pub fn spoken_punctuation(s: &str) -> String {
     capitalize_sentences(out.trim())
 }
 
+/// Spoken self-corrections. "at 3, actually 4" → "at 4";
+/// "before the timeline, actually no wait, after the timeline" →
+/// "after the timeline". The replacement takes over as many preceding
+/// words as it has itself (after dropping lead-ins like "make it"), which
+/// matches how people restate a phrase. Done in code because small models
+/// get this wrong in both directions.
+static CORRECTION: Lazy<Regex> = Lazy::new(|| {
+    // Leftmost-first: the long markers win over a bare ", actually".
+    // A plain "I mean" is left alone ("I mean it") unless it follows "sorry".
+    Regex::new(
+        r"(?i)(?:,?\s+(?:actually,?\s+no,?\s+wait|actually,?\s+no|no,?\s+wait|wait,?\s+no|scratch that|sorry,?\s+I\s+mean|or rather)|,\s*actually,?)[,.]?\s+",
+    )
+    .unwrap()
+});
+static LEAD_IN: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^(?:make it|let's say|let's do|let's make it|it's|it should be|change (?:it|that) to)\s+").unwrap());
+
+pub fn self_corrections(s: &str) -> String {
+    let mut out = s.to_string();
+    // Repeat: a sentence can hold more than one correction.
+    for _ in 0..4 {
+        let Some(m) = CORRECTION.find(&out) else { break };
+        let before = &out[..m.start()];
+        let after = &out[m.end()..];
+        // The correction runs to the next clause boundary.
+        let end = after.find(|c| matches!(c, ',' | '.' | '?' | '!' | ';' | '\n')).unwrap_or(after.len());
+        let fix_raw = after[..end].trim();
+        let fix = LEAD_IN.replace(fix_raw, "").to_string();
+        let fix_words: Vec<&str> = fix.split_whitespace().collect();
+        // Only short restatements; a long tail is real content, not a fix.
+        if fix_words.is_empty() || fix_words.len() > 6 {
+            // Not a correction we understand: leave the text, drop nothing.
+            let marker = &out[m.start()..m.end()];
+            if marker.trim().trim_matches(',').eq_ignore_ascii_case("actually") {
+                break;
+            }
+            break;
+        }
+        // The clause being corrected: back to the previous boundary.
+        let clause_start = before.rfind(|c| matches!(c, '.' | '?' | '!' | ';' | '\n')).map(|i| i + 1).unwrap_or(0);
+        let clause: Vec<&str> = before[clause_start..].split_whitespace().collect();
+        if clause.len() < fix_words.len() {
+            break;
+        }
+        // Align on a shared tail when there is one ("before the timeline"
+        // vs "after the timeline"), otherwise replace word-for-word.
+        let n = fix_words.len();
+        let kept = &clause[..clause.len() - n];
+        let mut fixed = kept.join(" ");
+        if !fixed.is_empty() {
+            fixed.push(' ');
+        }
+        fixed.push_str(&fix);
+        let prefix = &before[..clause_start];
+        let sep = if prefix.is_empty() || prefix.ends_with(char::is_whitespace) { "" } else { " " };
+        out = format!("{prefix}{sep}{fixed}{}", &after[end..]);
+    }
+    out
+}
+
 pub fn remove_fillers(s: &str) -> String {
     let out = FILLERS.replace_all(s, "");
     let out = MULTI_SPACE.replace_all(&out, " ");
@@ -109,7 +168,7 @@ pub fn capitalize_sentences(s: &str) -> String {
 /// Rules-only pass used when the formatter is off, not ready, or the text
 /// is too short to be worth a model call.
 pub fn basic(raw: &str, kind: Kind) -> String {
-    let mut s = remove_fillers(raw);
+    let mut s = self_corrections(&remove_fillers(raw));
     s = spoken_punctuation(&s);
     s = enforce_style(&s);
     if matches!(kind, Kind::Search | Kind::Terminal) {
@@ -189,6 +248,19 @@ mod tests {
         assert_eq!(spoken_punctuation("the trial period ends soon"), "The trial period ends soon");
         assert_eq!(spoken_punctuation("see you tomorrow period"), "See you tomorrow.");
         assert_eq!(spoken_punctuation("hi team period new paragraph the build is green"), "Hi team.\n\nThe build is green");
+    }
+
+    #[test]
+    fn corrections() {
+        assert_eq!(self_corrections("Can we meet Tuesday at 3, actually make it 4?"), "Can we meet Tuesday at 4?");
+        assert_eq!(
+            self_corrections("We should move pricing before the timeline, actually no wait, after the timeline. Thanks."),
+            "We should move pricing after the timeline. Thanks."
+        );
+        assert_eq!(self_corrections("Send it to John, sorry, I mean Jane."), "Send it to Jane.");
+        assert_eq!(self_corrections("That is great, I mean it."), "That is great, I mean it.");
+        assert_eq!(self_corrections("I actually like the new design."), "I actually like the new design.");
+        assert_eq!(self_corrections("We're at 3 now."), "We're at 3 now.");
     }
 
     #[test]

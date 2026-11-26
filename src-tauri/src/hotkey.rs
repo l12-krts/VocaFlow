@@ -12,6 +12,36 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 static CURRENT: Mutex<Option<Shortcut>> = Mutex::new(None);
 static DOWN: Mutex<bool> = Mutex::new(false);
 
+enum Edge {
+    Press,
+    Release,
+    Cancel,
+}
+
+/// Hotkey edges are handled on one worker thread, in order. The OS
+/// callback runs on the UI event loop, which must never wait on the
+/// microphone or the accessibility APIs.
+static WORKER: once_cell::sync::Lazy<std::sync::mpsc::Sender<(Arc<Core>, Edge)>> = once_cell::sync::Lazy::new(|| {
+    let (tx, rx) = std::sync::mpsc::channel::<(Arc<Core>, Edge)>();
+    std::thread::Builder::new()
+        .name("vf-hotkey".into())
+        .spawn(move || {
+            for (core, edge) in rx {
+                match edge {
+                    Edge::Press => core.on_press(),
+                    Edge::Release => core.on_release(),
+                    Edge::Cancel => core.cancel(),
+                }
+            }
+        })
+        .expect("hotkey worker");
+    tx
+});
+
+fn dispatch(core: Arc<Core>, edge: Edge) {
+    let _ = WORKER.send((core, edge));
+}
+
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, shortcut, event| {
@@ -19,7 +49,7 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             let core = core.inner().clone();
             if shortcut.matches(tauri_plugin_global_shortcut::Modifiers::empty(), tauri_plugin_global_shortcut::Code::Escape) {
                 if event.state == ShortcutState::Pressed {
-                    core.cancel();
+                    dispatch(core, Edge::Cancel);
                 }
                 return;
             }
@@ -35,11 +65,13 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                     }
                     *d = true;
                     drop(d);
-                    core.on_press();
+                    log::debug!("hotkey down");
+                    dispatch(core, Edge::Press);
                 }
                 ShortcutState::Released => {
                     *DOWN.lock() = false;
-                    core.on_release();
+                    log::debug!("hotkey up");
+                    dispatch(core, Edge::Release);
                 }
             }
         })
@@ -65,6 +97,7 @@ pub fn register(app: &AppHandle, accel: &str) -> Result<()> {
     }
     match gs.register(next) {
         Ok(()) => {
+            log::info!("dictation shortcut: {accel}");
             *CURRENT.lock() = Some(next);
             Ok(())
         }
@@ -113,9 +146,9 @@ pub fn portal_edge(app: &AppHandle, pressed: bool) {
         }
         *d = true;
         drop(d);
-        core.on_press();
+        dispatch(core, Edge::Press);
     } else {
         *DOWN.lock() = false;
-        core.on_release();
+        dispatch(core, Edge::Release);
     }
 }

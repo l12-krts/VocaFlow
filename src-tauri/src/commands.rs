@@ -13,9 +13,12 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Platform {
     os: &'static str,
     wayland: bool,
+    /// Synthetic input works (always, except Wayland without wtype/ydotool).
+    input_ready: bool,
 }
 
 #[tauri::command]
@@ -32,6 +35,10 @@ pub fn platform() -> Platform {
         wayland: crate::platform::linux::is_wayland(),
         #[cfg(not(target_os = "linux"))]
         wayland: false,
+        #[cfg(target_os = "linux")]
+        input_ready: crate::platform::linux::wayland_input_ready(),
+        #[cfg(not(target_os = "linux"))]
+        input_ready: true,
     }
 }
 
@@ -167,7 +174,13 @@ pub fn main_ready(app: AppHandle, dark: bool) {
     {
         let _ = app.run_on_main_thread(move || unsafe { crate::platform::macos::set_glass_dark(dark) });
     }
-    let _ = (&app, dark);
+    if let Some(w) = app.get_webview_window("main") {
+        // Native title bar follows the app theme, not just the OS.
+        let _ = w.set_theme(Some(if dark { tauri::Theme::Dark } else { tauri::Theme::Light }));
+    }
+    if crate::ui::SHOW_WHEN_READY.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        crate::ui::show_main(&app, None);
+    }
 }
 
 #[tauri::command]

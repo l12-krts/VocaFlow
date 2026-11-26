@@ -64,6 +64,8 @@ export interface Platform {
   os: 'macos' | 'windows' | 'linux';
   /** Linux only: wayland sessions need portal permission. */
   wayland: boolean;
+  /** False on Wayland without wtype/ydotool: paste can't be synthesised. */
+  inputReady?: boolean;
 }
 
 export interface Permissions {

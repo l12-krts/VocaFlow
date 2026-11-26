@@ -31,6 +31,8 @@ rubato = "0.16"
 whisper-rs = "0.15"
 candle-core = "0.9"
 candle-transformers = "0.9"
+candle-nn = "0.9"
+tracing = "0.1"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 arboard = { version = "3", features = ["wayland-data-control"] }
 enigo = "0.5"
@@ -49,6 +51,7 @@ core-foundation = "0.10"
 whisper-rs = { version = "0.15", features = ["metal"] }
 candle-core = { version = "0.9", features = ["metal"] }
 candle-transformers = { version = "0.9", features = ["metal"] }
+candle-nn = { version = "0.9", features = ["metal"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 window-vibrancy = "0.8"

@@ -94,14 +94,21 @@ pub fn start_focus_tracking() {
             log::warn!("AT-SPI focus events unavailable: {e}");
             return;
         }
+        // Caret moves fire on every keystroke in a text field: this catches
+        // the field even if it was focused before VocaFlow started.
+        let _ = conn.register_event::<atspi::events::object::TextCaretMovedEvent>().await;
         let tracker: &'static Tracker = Box::leak(Box::new(Tracker { conn, focused: Mutex::new(None) }));
         let _ = TRACKER.set(tracker);
         let mut events = tracker.conn.event_stream();
         while let Some(ev) = events.next().await {
-            if let Ok(atspi::Event::Object(atspi::events::ObjectEvents::StateChanged(e))) = ev {
-                if e.state == State::Focused && e.enabled {
+            match ev {
+                Ok(atspi::Event::Object(atspi::events::ObjectEvents::StateChanged(e))) if e.state == State::Focused && e.enabled => {
                     *tracker.focused.lock() = Some(e.item.clone());
                 }
+                Ok(atspi::Event::Object(atspi::events::ObjectEvents::TextCaretMoved(e))) => {
+                    *tracker.focused.lock() = Some(e.item.clone());
+                }
+                _ => {}
             }
         }
     });

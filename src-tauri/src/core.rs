@@ -161,6 +161,7 @@ impl Core {
 
     fn start(self: &Arc<Self>) {
         let st = self.settings();
+        log::info!("dictation start");
         // Make sure there's a model before opening the mic.
         if self.models.usable_speech(st.quality).is_none() {
             let msg = match self.models.speech.lock().clone() {
@@ -176,6 +177,7 @@ impl Core {
             m.cancel();
         }
         let ctx = context::capture();
+        log::debug!("context: app={:?} title={:?} role={:?}", ctx.app, ctx.title, ctx.role);
         ui::place_pill(&self.app, ctx.window);
         let capture = match Capture::start(st.mic_id.as_deref(), true) {
             Ok(c) => c,
@@ -261,12 +263,13 @@ impl Core {
         let raw = transcript.text;
         let mut text = cleanup::basic(&raw, kind);
 
-        let formatter_ready = st.formatting && self.models.has_formatter() && *self.models.formatter.lock() == Status::Ready;
+        // Loaded and warmed in the background by `sync_models`; never load
+        // a 1 GB model in the middle of a dictation.
+        let formatter_ready = st.formatting && self.formatter.is_loaded();
         if formatter_ready && formatter::worth_formatting(&raw, kind) {
             self.emit_pill(Phase::Formatting, false, Some(kind.label()), None);
             let fmt = || -> anyhow::Result<Option<String>> {
-                self.formatter.warm(&self.models.path(models::FORMATTER[0].file), &self.models.path(models::FORMATTER[1].file))?;
-                self.formatter.format(&cleanup::spoken_punctuation(&raw), kind, &ctx, Duration::from_secs(12))
+                self.formatter.format(&text, kind, &ctx, Duration::from_secs(10))
             };
             match fmt() {
                 Ok(Some(t)) => text = t,

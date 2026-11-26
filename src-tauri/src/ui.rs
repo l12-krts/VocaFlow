@@ -9,6 +9,9 @@
 use crate::context::Rect;
 use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+/// Set at launch: show Settings as soon as its page reports it has painted.
+pub static SHOW_WHEN_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub const PILL_W: f64 = 360.0;
 pub const PILL_H: f64 = 112.0;
 
@@ -16,6 +19,7 @@ pub fn create_main(app: &AppHandle, visible: bool) -> tauri::Result<WebviewWindo
     if let Some(w) = app.get_webview_window("main") {
         return Ok(w);
     }
+    #[allow(unused_mut)]
     let mut b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("VocaFlow")
         .inner_size(780.0, 560.0)
@@ -36,9 +40,7 @@ pub fn create_main(app: &AppHandle, visible: bool) -> tauri::Result<WebviewWindo
             let _ = w2.hide();
         }
     });
-    if visible {
-        // Shown by the page once it has painted, so there is no white flash.
-    }
+    let _ = visible;
     Ok(w)
 }
 
@@ -68,7 +70,8 @@ fn overlay(app: &AppHandle, label: &str, page: &str, w: f64, h: f64) -> tauri::R
         .focusable(false)
         .visible(false)
         .build()?;
-    win.set_ignore_cursor_events(true)?;
+    // Click-through is applied after the first show: on Linux the GDK
+    // window doesn't exist until the window is mapped.
     Ok(win)
 }
 
@@ -101,7 +104,7 @@ pub fn create_overlays(app: &AppHandle) -> tauri::Result<()> {
     place_pill(app, None);
     let _ = pill.show();
     let _ = fx.show();
-    // Showing can raise the overlay; make sure it never keeps focus.
+    // Clicks pass straight through to the apps underneath.
     let _ = pill.set_ignore_cursor_events(true);
     let _ = fx.set_ignore_cursor_events(true);
     Ok(())

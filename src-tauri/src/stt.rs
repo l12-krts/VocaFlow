@@ -48,10 +48,6 @@ impl Engine {
         Ok(())
     }
 
-    pub fn unload(&self) {
-        *self.loaded.lock() = None;
-    }
-
     pub fn transcribe(&self, path: &Path, audio: &[f32], req: &Request) -> Result<Transcript> {
         self.warm(path)?;
         let g = self.loaded.lock();
@@ -87,6 +83,7 @@ impl Engine {
         p.set_print_special(false);
         p.set_print_timestamps(false);
         p.set_temperature(0.0);
+        p.set_audio_ctx(audio_ctx(audio.len()));
         let prompt = prompt_for(req.dictionary);
         if !prompt.is_empty() {
             p.set_initial_prompt(&prompt);
@@ -105,6 +102,20 @@ impl Engine {
         }
         Ok(Transcript { text: clean(&text), language: lang })
     }
+}
+
+/// Whisper always encodes a 30 s window (1500 frames), so a two-second
+/// phrase costs as much as a long paragraph. Encoding only what we have,
+/// plus generous headroom, makes short dictations several times faster
+/// without hurting accuracy. Long recordings use the full window.
+fn audio_ctx(samples: usize) -> i32 {
+    let secs = samples as f32 / 16_000.0;
+    if secs >= 24.0 {
+        return 0; // 0 = model default (1500)
+    }
+    let frames = ((secs + 1.5) * 50.0 * 1.15) as i32;
+    // Round up to a multiple of 64; never go below ~8 s of context.
+    (((frames + 63) / 64) * 64).clamp(448, 1500)
 }
 
 fn detect(state: &mut whisper_rs::WhisperState, audio: &[f32], preferred: &[String], threads: usize) -> Option<String> {

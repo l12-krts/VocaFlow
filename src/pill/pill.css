@@ -14,12 +14,17 @@ body,
   cursor: default;
 }
 
+/*
+ * Anchored from the top: the window is 112px tall (pill 72 + 26 above for
+ * the enter lift + 14 below for the shadow), but some window managers
+ * enforce a taller minimum. A top offset keeps the pill exactly 14px above
+ * the taskbar/Dock no matter how tall the window ends up.
+ */
 #root {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: center;
-  /* Room for the shadow and the enter lift. */
-  padding-bottom: 14px;
+  padding-top: 26px;
   box-sizing: border-box;
 }
 

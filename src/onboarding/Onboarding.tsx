@@ -152,7 +152,7 @@ function MicStep({ s, update, platform }: { s: Settings; update: Update; platfor
             <PermRow label="Accessibility" info="Pastes text, reads context" granted={perm.accessibility === 'granted'} onGrant={() => api.requestPermission('accessibility')} />
           </div>
         )}
-        {platform.os === 'linux' && platform.wayland && (
+        {platform.os === 'linux' && platform.wayland && platform.inputReady === false && (
           <p className="text-center text-[12.5px] text-fg-subtle">
             Wayland: install <code className="rounded bg-surface px-1">wtype</code> or <code className="rounded bg-surface px-1">ydotool</code> for pasting
           </p>

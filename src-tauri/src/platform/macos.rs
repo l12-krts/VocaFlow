@@ -24,8 +24,11 @@ use std::ptr;
 // ---------- Glass ---------------------------------------------------------
 
 pub const PILL_H: f64 = 72.0;
-/// Distance from the window bottom to the pill (matches pill.css padding).
-pub const PILL_BOTTOM: f64 = 14.0;
+/// Pill top inside the window (pill.css `padding-top`), measured from the
+/// top. AppKit's origin is bottom-left, so the glass uses the window height.
+pub const PILL_TOP: f64 = 26.0;
+pub const WINDOW_H: f64 = 112.0;
+const PILL_BOTTOM: f64 = WINDOW_H - PILL_TOP - PILL_H;
 
 struct Glass {
     view: Retained<AnyObject>,
