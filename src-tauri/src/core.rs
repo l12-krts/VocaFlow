@@ -97,18 +97,21 @@ impl Core {
     }
 
     fn emit_pill(&self, phase: Phase, hands_free: bool, format: Option<&str>, message: Option<&str>) {
+        if phase != Phase::Idle {
+            ui::set_active(&self.app, "pill", true);
+        }
         *self.phase.lock() = phase;
         *self.epoch.lock() += 1;
         if phase == Phase::Idle && cfg!(target_os = "windows") {
-            // Park the overlays once the close animation has played.
+            // Stop taking clicks once the close animation has played.
             let app = self.app.clone();
             let epoch = *self.epoch.lock();
             let me_phase = self.phase_handle();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(1200));
                 if me_phase.0.lock().eq(&Phase::Idle) && *me_phase.1.lock() == epoch {
-                    ui::park(&app, "pill");
-                    ui::park(&app, "fx");
+                    ui::set_active(&app, "pill", false);
+                    ui::set_active(&app, "fx", false);
                 }
             });
         }
@@ -294,6 +297,7 @@ impl Core {
         }
         let kind = context::classify(&ctx);
         let raw = transcript.text;
+        let transcript_lang = transcript.language.clone();
         let mut text = cleanup::basic(&raw, kind);
 
         // Loaded and warmed in the background by `sync_models`; never load
@@ -312,7 +316,7 @@ impl Core {
         if formatter_ready && formatter::worth_formatting(&raw, kind) {
             self.emit_pill(Phase::Formatting, false, Some(kind.label()), None);
             let fmt = || -> anyhow::Result<Option<String>> {
-                self.formatter.format(&text, kind, &ctx, Duration::from_secs(10))
+                self.formatter.format(&text, kind, &ctx, &transcript_lang)
             };
             match fmt() {
                 Ok(Some(t)) => text = t,

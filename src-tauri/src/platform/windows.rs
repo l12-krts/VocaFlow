@@ -20,8 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// click-through works) leaves them blank after the first repaint and makes
 /// DWM fall back to the legacy frame: the "Windows 7" outline. So overlays
 /// are never layered. They have no frame, border, corners or transitions,
-/// never take focus, and VocaFlow parks them off-screen while idle so they
-/// can't intercept clicks.
+/// never take focus, and while idle their hit area shrinks to one pixel
+/// (see `set_hit_area`) so they can't intercept clicks.
 pub fn make_overlay(hwnd: isize) {
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_NCRENDERING_POLICY,
@@ -205,5 +205,26 @@ pub fn mask_alt_menu() {
     };
     unsafe {
         SendInput(&[key(false), key(true)], std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// Where an overlay takes clicks. Active: the whole (mostly transparent)
+/// window, only while the pill is showing. Idle: a single pixel, so clicks
+/// go to the apps underneath.
+///
+/// The window stays on screen and visible the whole time. Moving it
+/// off-screen instead made WebView2 stop painting, and the first frames
+/// after it came back were already the end of the open animation.
+pub fn set_hit_area(hwnd: isize, active: bool) {
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
+    unsafe {
+        let h = HWND(hwnd as _);
+        if active {
+            let _ = SetWindowRgn(h, None, true);
+        } else {
+            // The system owns the region after SetWindowRgn; don't free it.
+            let rgn = CreateRectRgn(0, 0, 1, 1);
+            let _ = SetWindowRgn(h, Some(rgn), true);
+        }
     }
 }

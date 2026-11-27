@@ -5,7 +5,9 @@ use crate::context::{Context, Kind};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-static FILLERS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\b(?:u+m+|u+h+|erm+|a+h+|hmm+|mm+)\b[,.]?").unwrap());
+/// English and Greek hesitation sounds ("um", "uh", "εεε", "εμ", "χμ").
+static FILLERS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\b(?:u+m+|u+h+|erm+|a+h+|hmm+|mm+|ε{2,}|εμ+|χμ+|α{3,})\b[,.]?").unwrap());
 static SPACE_BEFORE_PUNCT: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+([,.;:!?])").unwrap());
 static MULTI_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ \t]{2,}").unwrap());
 static NUM_RANGE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d)\s*[\u{2014}\u{2013}]\s*(\d)").unwrap());
@@ -33,16 +35,42 @@ const SPOKEN: &[(&str, &str)] = &[
     ("close paren", ")"),
     ("open quote", "\""),
     ("close quote", "\""),
+    // Greek. ("κόμμα" is handled separately: it also means a political
+    // party. "τελεία" is handled with "period".)
+    ("νέα παράγραφος", "\n\n"),
+    ("καινούρια παράγραφος", "\n\n"),
+    ("καινούργια παράγραφος", "\n\n"),
+    ("νέα γραμμή", "\n"),
+    ("καινούρια γραμμή", "\n"),
+    ("καινούργια γραμμή", "\n"),
+    ("ερωτηματικό", ";"),
+    ("θαυμαστικό", "!"),
 ];
+
+/// "άνω κάτω τελεία" (colon) must go before "τελεία" (full stop).
+static GREEK_COLON: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)[,.]?\s*\bάνω κάτω τελεία\b[,.]?").unwrap());
+/// Spoken "κόμμα", unless it follows an article ("το κόμμα" = the party).
+static GREEK_COMMA: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)(\S+)?(\s*)\bκόμμα\b[,.]?").unwrap());
+const GREEK_ARTICLES: &[&str] = &["το", "του", "τα", "των", "στο", "στα", "ένα", "κάθε", "ενός", "με", "σε"];
 
 /// "period" only counts as punctuation at the end of the dictation or
 /// right before a spoken line break, so "the trial period ends" survives.
 static PERIOD: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)[,.]?\s+(?:period|full stop)[,.]?(\s+(?:new line|newline|next line|new paragraph|next paragraph)\b|\s*$)").unwrap()
+    Regex::new(r"(?i)[,.]?\s+(?:period|full stop|τελεία)[,.]?(\s+(?:new line|newline|next line|new paragraph|next paragraph|νέα γραμμή|νέα παράγραφος|καινούρια γραμμή|καινούρια παράγραφος)\b|\s*$)").unwrap()
 });
 
 pub fn spoken_punctuation(s: &str) -> String {
-    let mut out = PERIOD.replace_all(s, ".$1").into_owned();
+    let s = GREEK_COLON.replace_all(s, ":");
+    let s = GREEK_COMMA.replace_all(&s, |c: &regex::Captures| {
+        let prev = c.get(1).map(|m| m.as_str()).unwrap_or("");
+        let bare = prev.trim_matches(|ch: char| !ch.is_alphanumeric()).to_lowercase();
+        if GREEK_ARTICLES.contains(&bare.as_str()) {
+            c[0].to_string()
+        } else {
+            format!("{prev},")
+        }
+    });
+    let mut out = PERIOD.replace_all(&s, ".$1").into_owned();
     for (phrase, sym) in SPOKEN {
         if matches!(*phrase, "period" | "full stop") {
             continue;
@@ -63,7 +91,7 @@ pub fn spoken_punctuation(s: &str) -> String {
     let re = Regex::new(r"[ \t]*\n[ \t]*").unwrap();
     out = re.replace_all(&out, "\n").into_owned();
     // "word ,next" → "word, next"
-    let re = Regex::new(r"([,;:?!])([A-Za-z])").unwrap();
+    let re = Regex::new(r"([,;:?!])([A-Za-zΑ-Ωα-ωΆ-Ώά-ώ])").unwrap();
     out = re.replace_all(&out, "$1 $2").into_owned();
     capitalize_sentences(out.trim())
 }
@@ -78,7 +106,7 @@ static CORRECTION: Lazy<Regex> = Lazy::new(|| {
     // Leftmost-first: the long markers win over a bare ", actually".
     // A plain "I mean" is left alone ("I mean it") unless it follows "sorry".
     Regex::new(
-        r"(?i)(?:,?\s+(?:actually,?\s+no,?\s+wait|actually,?\s+no|no,?\s+wait|wait,?\s+no|scratch that|sorry,?\s+I\s+mean|or rather)|,\s*actually,?)[,.]?\s+",
+        r"(?i)(?:,?\s+(?:actually,?\s+no,?\s+wait|actually,?\s+no|no,?\s+wait|wait,?\s+no|scratch that|sorry,?\s+I\s+mean|or rather|όχι,?\s+περίμενε|συγγνώμη,?\s+εννοώ|όχι,?\s+συγγνώμη)|,\s*actually,?)[,.]?\s+",
     )
     .unwrap()
 });
@@ -146,7 +174,21 @@ pub fn enforce_style(s: &str) -> String {
     lines.join("\n").trim().to_string()
 }
 
+/// Mostly Greek letters? Then ";" is a question mark and ends a sentence.
+fn is_greek(s: &str) -> bool {
+    let (mut greek, mut other) = (0, 0);
+    for c in s.chars().filter(|c| c.is_alphabetic()) {
+        if matches!(c as u32, 0x0370..=0x03FF | 0x1F00..=0x1FFF) {
+            greek += 1;
+        } else {
+            other += 1;
+        }
+    }
+    greek > other
+}
+
 pub fn capitalize_sentences(s: &str) -> String {
+    let greek = is_greek(s);
     let mut out = String::with_capacity(s.len());
     let mut cap = true;
     for ch in s.chars() {
@@ -155,7 +197,7 @@ pub fn capitalize_sentences(s: &str) -> String {
             cap = false;
             continue;
         }
-        if matches!(ch, '.' | '!' | '?' | '\n') {
+        if matches!(ch, '.' | '!' | '?' | '\n') || (greek && matches!(ch, ';' | '\u{37e}')) {
             cap = true;
         } else if !ch.is_whitespace() && ch != '"' && ch != '(' {
             cap = false;
@@ -176,13 +218,117 @@ pub fn basic(raw: &str, kind: Kind) -> String {
         return s.trim_end_matches(['.', '!']).to_string();
     }
     let words = s.split_whitespace().count();
-    if words >= 4 && !s.ends_with(['.', '!', '?', ':', ')', '"']) && kind != Kind::Commit && kind != Kind::Chat {
+    if words >= 4 && !s.ends_with(['.', '!', '?', ':', ')', '"', ';', '\u{37e}']) && kind != Kind::Commit && kind != Kind::Chat {
         s.push('.');
     }
     if kind == Kind::Commit {
         s = s.trim_end_matches('.').to_string();
     }
+    if kind == Kind::Email {
+        let (g, body, so) = split_email(&s);
+        s = join_email(g.as_deref(), &paragraphs(&body), so.as_deref());
+    } else if kind == Kind::Document {
+        s = paragraphs(&s);
+    }
     s
+}
+
+/// Long unbroken dictation reads as a wall of text. Group sentences into
+/// paragraphs of roughly 60-90 words. Leaves short text and text that
+/// already has line breaks alone (the speaker said "new paragraph").
+pub fn paragraphs(s: &str) -> String {
+    let words = s.split_whitespace().count();
+    if words < 120 || s.contains('\n') {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut para = String::new();
+    let mut para_words = 0;
+    let mut sentence = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        sentence.push(c);
+        let end = matches!(c, '.' | '!' | '?' | '\u{37e}') || (c == ';' && is_greek(s));
+        if end && chars.peek().map_or(true, |n| n.is_whitespace()) {
+            para_words += sentence.split_whitespace().count();
+            para.push_str(&sentence);
+            sentence.clear();
+            if para_words >= 60 {
+                if !out.is_empty() {
+                    out.push_str("\n\n");
+                }
+                out.push_str(para.trim());
+                para.clear();
+                para_words = 0;
+            }
+        }
+    }
+    para.push_str(&sentence);
+    if !para.trim().is_empty() {
+        // A short tail joins the previous paragraph.
+        if para_words < 25 && !out.is_empty() {
+            out.push(' ');
+        } else if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(para.trim());
+    }
+    out
+}
+
+/// Spoken greeting at the start ("hi Maria", "γεια σου Μαρία").
+static GREETING: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^(hi|hello|hey|dear|good morning|good afternoon|γεια σου|γεια σας|καλημέρα|καλησπέρα|αγαπητέ|αγαπητή)\s+(\p{Lu}[\p{L}'-]*(?:\s+\p{Lu}[\p{L}'-]*)?)\s*[,!.]?\s+").unwrap()
+});
+/// Spoken sign-off and name at the end ("best, Alex", "φιλικά, Νίκος").
+static SIGNOFF: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)[,.]?\s*\b(best regards|kind regards|warm regards|many thanks|thanks again|thank you|best wishes|best|regards|thanks|cheers|sincerely|φιλικά|με εκτίμηση|με φιλικούς χαιρετισμούς|χαιρετίσματα|ευχαριστώ πολύ|φιλιά)[,.]?\s+(\p{Lu}[\p{L}'-]*(?:\s+\p{Lu}[\p{L}'-]*){0,2})\.?\s*$").unwrap()
+});
+
+/// Split an email into (greeting, body, sign-off), as spoken. The
+/// greeting and sign-off are kept verbatim and never sent to the model.
+pub fn split_email(s: &str) -> (Option<String>, String, Option<String>) {
+    let mut body = s.trim().to_string();
+    let mut greeting = None;
+    let mut signoff = None;
+    if let Some(c) = GREETING.captures(&body) {
+        let end = c.get(0).unwrap().end();
+        greeting = Some(format!("{},", capitalize_sentences(&format!("{} {}", &c[1], &c[2]))));
+        body = capitalize_sentences(body[end..].trim_start());
+    }
+    if let Some(c) = SIGNOFF.captures(&body) {
+        let start = c.get(0).unwrap().start();
+        let rest = body[..start].trim_end().to_string();
+        // Only when it really closes the email, not a sentence ending in "thanks".
+        if !rest.is_empty() {
+            signoff = Some(format!("{},\n{}", capitalize_sentences(&c[1].to_lowercase()), &c[2]));
+            body = if rest.ends_with(['.', '!', '?', ';', ':', '\u{37e}']) { rest } else { format!("{rest}.") };
+        }
+    }
+    (greeting, body, signoff)
+}
+
+/// The bones of an email, deterministically: greeting on its own line,
+/// sign-off and name on their own lines. Language-agnostic structure, so
+/// it never risks the wording; the model (if used) handles paragraphs.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn email_shape(s: &str) -> String {
+    let (g, body, so) = split_email(s);
+    join_email(g.as_deref(), &body, so.as_deref())
+}
+
+pub fn join_email(greeting: Option<&str>, body: &str, signoff: Option<&str>) -> String {
+    let mut parts: Vec<&str> = vec![];
+    if let Some(g) = greeting {
+        parts.push(g);
+    }
+    if !body.trim().is_empty() {
+        parts.push(body.trim());
+    }
+    if let Some(so) = signoff {
+        parts.push(so);
+    }
+    parts.join("\n\n")
 }
 
 /// Fit the text to what's already in the field: spacing and casing at the
@@ -261,6 +407,47 @@ mod tests {
         assert_eq!(self_corrections("That is great, I mean it."), "That is great, I mean it.");
         assert_eq!(self_corrections("I actually like the new design."), "I actually like the new design.");
         assert_eq!(self_corrections("We're at 3 now."), "We're at 3 now.");
+    }
+
+    #[test]
+    fn greek() {
+        assert_eq!(remove_fillers("εεε λοιπόν χμμ θα έρθω"), "λοιπόν θα έρθω");
+        assert_eq!(spoken_punctuation("γεια σου κόμμα τι κάνεις ερωτηματικό"), "Γεια σου, τι κάνεις;");
+        assert_eq!(spoken_punctuation("ψήφισα το κόμμα της αρεσκείας μου"), "Ψήφισα το κόμμα της αρεσκείας μου");
+        assert_eq!(spoken_punctuation("τα λέμε αύριο τελεία"), "Τα λέμε αύριο.");
+        assert_eq!(spoken_punctuation("τρία πράγματα άνω κάτω τελεία ψωμί γάλα"), "Τρία πράγματα: ψωμί γάλα");
+        assert_eq!(spoken_punctuation("πρώτη γραμμή νέα γραμμή δεύτερη γραμμή"), "Πρώτη γραμμή\nΔεύτερη γραμμή");
+        assert_eq!(capitalize_sentences("ήρθες; ναι ήρθα."), "Ήρθες; Ναι ήρθα.");
+        assert_eq!(
+            self_corrections("Τα λέμε την Τρίτη στις τρεις, όχι περίμενε, στις τέσσερις."),
+            "Τα λέμε την Τρίτη στις τέσσερις."
+        );
+        // English semicolons don't start sentences.
+        assert_eq!(capitalize_sentences("we tried; it worked."), "We tried; it worked.");
+    }
+
+    #[test]
+    fn paragraphs_long_text() {
+        let s = "This is a sentence with exactly ten words in it ok. ".repeat(20);
+        let p = paragraphs(s.trim());
+        let paras: Vec<&str> = p.split("\n\n").collect();
+        assert!(paras.len() >= 2 && paras.len() <= 4, "{}", paras.len());
+        assert_eq!(p.split_whitespace().count(), 220);
+        assert_eq!(paragraphs("Short text. Stays."), "Short text. Stays.");
+    }
+
+    #[test]
+    fn email_bones() {
+        assert_eq!(
+            email_shape("Hi Maria, thanks for the draft. See you Friday. Best, Alex."),
+            "Hi Maria,\n\nThanks for the draft. See you Friday.\n\nBest,\nAlex"
+        );
+        assert_eq!(
+            email_shape("Γεια σου Μαρία, ευχαριστώ για το προσχέδιο. Τα λέμε την Παρασκευή. Φιλικά, Αλέξανδρος."),
+            "Γεια σου Μαρία,\n\nΕυχαριστώ για το προσχέδιο. Τα λέμε την Παρασκευή.\n\nΦιλικά,\nΑλέξανδρος"
+        );
+        // "thanks" inside the body isn't a sign-off without a name after it.
+        assert_eq!(email_shape("It works now, thanks."), "It works now, thanks.");
     }
 
     #[test]

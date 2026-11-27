@@ -42,8 +42,8 @@ export function Onboarding({ s, update, platform }: { s: Settings; update: Updat
             custom={dir}
             className="w-full max-w-[440px]"
             initial={reduced ? { opacity: 0 } : { opacity: 0, x: dir * 24, filter: 'blur(3px)' }}
-            animate={{ opacity: 1, x: 0, filter: 'blur(0px)', transition: { duration: 0.28, ease: [0.23, 1, 0.32, 1] } }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, x: dir * -16, filter: 'blur(3px)', transition: { duration: 0.16, ease: [0.23, 1, 0.32, 1] } }}
+            animate={{ opacity: 1, x: 0, filter: 'blur(0px)', transition: { duration: 0.28, ease: [0.16, 1, 0.3, 1] } }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, x: dir * -16, filter: 'blur(3px)', transition: { duration: 0.16, ease: [0.16, 1, 0.3, 1] } }}
           >
             {step === 'welcome' && <Welcome />}
             {step === 'mic' && <MicStep s={s} update={update} platform={platform} />}
@@ -82,7 +82,7 @@ function Dots({ count, active }: { count: number; active: number }) {
       {Array.from({ length: count }, (_, n) => (
         <span
           key={n}
-          className="h-1.5 rounded-full transition-[width,background-color] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]"
+          className="h-1.5 rounded-full transition-[width,background-color] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
           style={{ width: n === active ? 18 : 6, background: n <= active ? 'var(--krts-primary)' : 'var(--krts-line)' }}
         />
       ))}
@@ -236,6 +236,18 @@ function Gesture({ title, sub, kind }: { title: string; sub: string; kind: 'hold
 
 function AccuracyStep({ s, update }: { s: Settings; update: Update }) {
   const models = useModels();
+  // Start from the languages the system is set up for (plus English):
+  // detection limited to them is far more reliable on short phrases.
+  useEffect(() => {
+    if (s.preferredLanguages.length > 0) return;
+    const fromSystem = (navigator.languages ?? [navigator.language])
+      .map((l) => l.toLowerCase().split('-')[0])
+      .filter((c) => LANGUAGES.some((l) => l.code === c));
+    const defaults = [...new Set([...fromSystem, 'en'])].slice(0, 3);
+    update({ preferredLanguages: defaults });
+    // Only on first visit to this step.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const available = useMemo(() => LANGUAGES.filter((l) => !s.preferredLanguages.includes(l.code)), [s.preferredLanguages]);
   return (
     <>

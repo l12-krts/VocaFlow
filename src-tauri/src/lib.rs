@@ -152,7 +152,7 @@ fn _assert_send(_: Arc<Core>) {}
 pub mod e2e {
     use crate::context::{classify, Context};
     use crate::{audio, cleanup, formatter, models, settings::Quality, stt};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     pub fn run(wav: &str, dir: &str, quality: &str, contexts: &[(&str, &str, &str)], format: bool) -> anyhow::Result<()> {
         let q: Quality = serde_json::from_value(serde_json::Value::String(quality.into()))?;
@@ -167,6 +167,7 @@ pub mod e2e {
         }
         // `wav` may be a transcript instead ("text:..."), to test formatting
         // with realistic Whisper output.
+        let mut detected = "en".to_string();
         let text = if let Some(t) = wav.strip_prefix("text:") {
             t.to_string()
         } else {
@@ -180,10 +181,12 @@ pub mod e2e {
             let t = Instant::now();
             let tr = eng.transcribe(&path, &audio, &stt::Request { language: "auto", preferred: &["en".into(), "el".into()], dictionary: &["VocaFlow".into()], quality: q })?;
             println!("RAW [{}] ({:?}): {}", tr.language, t.elapsed(), tr.text);
+            detected = tr.language.clone();
             tr.text
         };
         struct Tr { text: String }
         let tr = Tr { text };
+        let lang = std::env::var("VOCAFLOW_LANG").unwrap_or_else(|_| detected.clone());
         let f = formatter::Formatter::new();
         f.configure(std::env::var_os("VOCAFLOW_LLAMA_DIR").map(Into::into).unwrap_or_default(), std::env::temp_dir().join("vocaflow-formatter.log"));
         if format {
@@ -198,9 +201,33 @@ pub mod e2e {
             println!("\n== {app} / {title} -> {kind:?}\nRULES: {basic}");
             if format {
                 let t = Instant::now();
-                let out = f.format(&basic, kind, &ctx, Duration::from_secs(60))?;
+                let out = f.format(&basic, kind, &ctx, &lang)?;
                 println!("MODEL ({:?}):\n{}", t.elapsed(), out.unwrap_or_else(|| "<rejected>".into()));
             }
+        }
+        Ok(())
+    }
+
+    /// Format a text file as if dictated into `app` (e.g. "Mail"), and
+    /// report parts, timing and whether the language survived.
+    pub fn format_file(path: &str, dir: &str, app: &str, title: &str, lang: &str) -> anyhow::Result<()> {
+        let text = std::fs::read_to_string(path)?;
+        let m = models::Models::new(dir.into());
+        let f = formatter::Formatter::new();
+        f.configure(std::env::var_os("VOCAFLOW_LLAMA_DIR").map(Into::into).unwrap_or_default(), std::env::temp_dir().join("vocaflow-formatter.log"));
+        f.warm(&m.path(models::FORMATTER[0].file))?;
+        let ctx = Context { app: app.into(), title: title.into(), ..Default::default() };
+        let kind = classify(&ctx);
+        let basic = cleanup::basic(&text, kind);
+        let words = basic.split_whitespace().count();
+        let t = Instant::now();
+        let out = f.format(&basic, kind, &ctx, lang)?;
+        let elapsed = t.elapsed();
+        match out {
+            Some(o) => {
+                println!("=== {kind:?}, {words} words in, {} words out, {:?}\n{o}", o.split_whitespace().count(), elapsed);
+            }
+            None => println!("=== {kind:?}, {words} words: rules kept ({elapsed:?})\n{basic}"),
         }
         Ok(())
     }

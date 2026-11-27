@@ -108,26 +108,28 @@ pub fn create_overlays(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "windows")]
     {
         // See platform::windows::make_overlay: no layered click-through on
-        // Windows; overlays wait off-screen instead.
+        // Windows; idle overlays take clicks on one pixel only.
         for w in [&pill, &fx] {
             if let Ok(h) = w.hwnd() {
                 crate::platform::windows::make_overlay(h.0 as isize);
             }
         }
-        park(app, "pill");
-        park(app, "fx");
+        set_active(app, "pill", false);
+        set_active(app, "fx", false);
     }
     Ok(())
 }
 
-/// Windows only: move an idle overlay off-screen so it can never block a
-/// click. (macOS and Linux overlays are click-through instead.)
-pub fn park(app: &AppHandle, label: &str) {
+/// Windows only: whether an overlay takes clicks (only while it shows
+/// something). macOS and Linux overlays are always click-through.
+pub fn set_active(app: &AppHandle, label: &str, active: bool) {
     #[cfg(target_os = "windows")]
     if let Some(w) = app.get_webview_window(label) {
-        let _ = w.set_position(PhysicalPosition::new(-20000, -20000));
+        if let Ok(h) = w.hwnd() {
+            crate::platform::windows::set_hit_area(h.0 as isize, active);
+        }
     }
-    let _ = (app, label);
+    let _ = (app, label, active);
 }
 
 #[cfg(target_os = "windows")]
@@ -163,7 +165,10 @@ pub fn place_pill(app: &AppHandle, anchor: Option<Rect>) {
     let _ = pill.set_size(LogicalSize::new(PILL_W, PILL_H));
     let _ = pill.set_position(PhysicalPosition::new(x, y));
     #[cfg(target_os = "windows")]
-    raise(&pill);
+    {
+        set_active(app, "pill", true);
+        raise(&pill);
+    }
 }
 
 /// Move the shimmer overlay over the line where text is being inserted,
@@ -189,7 +194,10 @@ pub fn place_fx(app: &AppHandle, caret: Option<Rect>, chars: usize) -> Option<(f
         let _ = fx.set_size(PhysicalSize::new((width + pad * 2.0 * scale) as u32, (line_h + pad * 2.0 * scale) as u32));
         let _ = fx.set_position(PhysicalPosition::new((c.x - pad * scale) as i32, (c.y - pad * scale) as i32));
         #[cfg(target_os = "windows")]
-        raise(&fx);
+        {
+            set_active(app, "fx", true);
+            raise(&fx);
+        }
         Some((width / scale, line_h / scale))
     }
 }

@@ -44,7 +44,7 @@ export function AccuracySlider({ value, onChange }: { value: Quality; onChange: 
                 />
               ))}
               <div
-                className={`vf-fill absolute top-1/2 left-0 h-2 -translate-y-1/2 rounded-full ${dragging ? '' : 'transition-[width] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]'}`}
+                className={`vf-fill absolute top-1/2 left-0 h-2 -translate-y-1/2 rounded-full ${dragging ? '' : 'transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]'}`}
                 style={{ width: `${pct}%` }}
               >
                 <span className="vf-fill-solid" />
@@ -52,7 +52,7 @@ export function AccuracySlider({ value, onChange }: { value: Quality; onChange: 
                 <span className="vf-fill-glow" aria-hidden />
               </div>
               <SliderThumb
-                className={`vf-thumb top-1/2 size-6 rounded-full border border-surface bg-white outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${dragging ? '' : 'transition-[left] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]'}`}
+                className={`vf-thumb top-1/2 size-6 rounded-full border border-surface bg-white outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${dragging ? '' : 'transition-[left] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]'}`}
               >
                 <span className="vf-thumb-halo" aria-hidden />
               </SliderThumb>

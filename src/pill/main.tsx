@@ -1,6 +1,6 @@
 import '@fontsource-variable/inter';
 import './pill.css';
-import { StrictMode, useCallback, useEffect, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, events, inTauri, on } from '../lib/ipc';
 import { useTheme } from '../lib/theme';
@@ -14,13 +14,36 @@ function PillApp() {
   const [platform, setPlatform] = useState<Platform>({ os: 'windows', wayland: false });
   const [sounds, setSounds] = useState(true);
   const preview = !inTauri;
+  const phaseRef = useRef<PillState['phase']>('idle');
+  const latest = useRef<PillState | null>(null);
+  const openToken = useRef(0);
 
   useEffect(() => {
     api.platform().then(setPlatform);
     api.getSettings().then((s) => setSounds(s.sounds));
     const offs = [
       on<{ sounds: boolean }>(events.settings, (s) => setSounds(s.sounds)),
-      on<PillState>(events.pill, (next) => setState(next)),
+      on<PillState>(events.pill, (next) => {
+        // Opening from idle: wait until the page is really painting (two
+        // animation frames) before starting the animation. A webview that
+        // was idle can take a moment to produce frames again, and starting
+        // earlier would skip straight to the end of the open animation.
+        if (next.phase !== 'idle' && phaseRef.current === 'idle') {
+          const token = ++openToken.current;
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              if (token === openToken.current) setState(latest.current ?? next);
+            }),
+          );
+          latest.current = next;
+          phaseRef.current = next.phase;
+          return;
+        }
+        openToken.current++;
+        latest.current = next;
+        phaseRef.current = next.phase;
+        setState(next);
+      }),
     ];
     api.pillReady();
     if (preview && new URLSearchParams(location.search).has('bg')) document.body.classList.add('preview-bg');

@@ -99,8 +99,8 @@ unsafe fn animate(duration: f64, curve: [f32; 4], f: impl FnOnce()) {
     let _: () = msg_send![ctx_cls, endGrouping];
 }
 
-const EASE_OUT: [f32; 4] = [0.23, 1.0, 0.32, 1.0];
-const DRAWER: [f32; 4] = [0.32, 0.72, 0.0, 1.0];
+/// Ease-out-expo, the same curve as the CSS pill (Pill.tsx).
+const EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 
 /// Mirror the CSS pill (Pill.tsx): open as a circle that stretches to its
 /// width, morph between states, close by collapsing back into a circle.
@@ -112,15 +112,15 @@ pub unsafe fn shape_glass(width: f64, visible: bool, reduced: bool) {
         (false, true) => {
             let from = if reduced { rect_for(g.window_w, width, 1.0, 0.0) } else { circle(g.window_w, 0.8, -10.0) };
             let _: () = msg_send![v, setFrame: from];
-            animate(if reduced { 0.12 } else { 0.16 }, EASE_OUT, || {
+            animate(if reduced { 0.25 } else { 0.2 }, EXPO, || {
                 let _: () = msg_send![proxy, setAlphaValue: 1.0f64];
             });
-            animate(if reduced { 0.0 } else { 0.5 }, DRAWER, || {
+            animate(if reduced { 0.3 } else { 0.6 }, EXPO, || {
                 let _: () = msg_send![proxy, setFrame: rect_for(g.window_w, width, 1.0, 0.0)];
             });
         }
         (true, false) => {
-            animate(if reduced { 0.12 } else { 0.36 }, DRAWER, || {
+            animate(if reduced { 0.3 } else { 0.45 }, EXPO, || {
                 if !reduced {
                     let _: () = msg_send![proxy, setFrame: circle(g.window_w, 0.82, -6.0)];
                 }
@@ -128,7 +128,7 @@ pub unsafe fn shape_glass(width: f64, visible: bool, reduced: bool) {
             });
         }
         (true, true) if (width - g.width).abs() > 0.5 => {
-            animate(if reduced { 0.0 } else { 0.42 }, DRAWER, || {
+            animate(if reduced { 0.3 } else { 0.5 }, EXPO, || {
                 let _: () = msg_send![proxy, setFrame: rect_for(g.window_w, width, 1.0, 0.0)];
             });
         }

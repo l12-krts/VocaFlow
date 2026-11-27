@@ -87,7 +87,7 @@ export function SettingsView({
                   <motion.span
                     layoutId="nav-active"
                     className="absolute inset-0 rounded-[8px] bg-bg shadow-[0_0_0_1px_var(--krts-line-subtle),0_1px_2px_rgb(0_0_0/0.04)]"
-                    transition={{ type: 'spring', duration: 0.3, bounce: 0.1 }}
+                    transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
                   />
                 )}
                 <svg width="16" height="16" viewBox="0 0 16 16" className="relative shrink-0" aria-hidden>

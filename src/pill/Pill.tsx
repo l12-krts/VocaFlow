@@ -14,25 +14,25 @@ const LOADER_SPAN = 18 + 11 + 18 + 11 + 18; // dot, bar, dot
 const TEXT_GAP = 15;
 const PAD_R = 22;
 
-const EASE_OUT = [0.23, 1, 0.32, 1] as const;
-const DRAWER = [0.32, 0.72, 0, 1] as const;
+/** Ease-out-expo: fast to respond, long soft settle. Every pill transition
+ *  uses it (and the macOS glass mirrors it in Core Animation). */
+const EXPO = [0.16, 1, 0.3, 1] as const;
 
 /**
  * Choreography (Dynamic Island-like, one object the whole time):
  *
- *  open    a 72px circle rises and fades in, then stretches to its width
- *          (spring); the content blurs in once there's room for it.
- *  change  width springs to the new state while the old content blurs out
+ *  open    a 72px circle rises and fades in, then stretches to its width;
+ *          the content blurs in once there's room for it.
+ *  change  width glides to the new state while the old content blurs out
  *          and the new one blurs in; loader blobs pop in with a stagger.
  *  close   content fades first, the pill pulls back into a circle, then
  *          the circle shrinks away. Faster than opening, as exits should be.
  *
- * macOS uses timing curves instead of springs because the native glass
- * behind the webview is driven by Core Animation and must stay in step.
+ * All of it runs on ease-out-expo, the same curve the macOS glass layer
+ * uses, so tint and refraction move as one.
  */
 export function Pill({ state, platform, onShape }: { state: PillState; platform: Platform; onShape?: (w: number) => void }) {
   const reduced = usePrefersReducedMotion();
-  const mac = platform.os === 'macos';
   const label = state.phase === 'formatting' ? `Writing ${state.format ?? 'text'}…` : null;
   const message = state.phase === 'error' ? state.message ?? 'Something went wrong' : null;
 
@@ -70,11 +70,11 @@ export function Pill({ state, platform, onShape }: { state: PillState; platform:
   }
   const justOpened = performance.now() - openedAt.current < 120;
 
+  // Reduced motion means gentler, not none: the pill still eases between
+  // sizes and crossfades, without scaling, sliding or blur.
   const widthT: Transition = reduced
-    ? { duration: 0 }
-    : mac
-      ? { duration: justOpened ? 0.5 : 0.42, ease: DRAWER, delay: justOpened ? 0.05 : 0 }
-      : { type: 'spring', duration: justOpened ? 0.55 : 0.45, bounce: justOpened ? 0.24 : 0.16, delay: justOpened ? 0.06 : 0 };
+    ? { duration: 0.3, ease: EXPO }
+    : { duration: justOpened ? 0.6 : 0.5, ease: EXPO, delay: justOpened ? 0.05 : 0 };
 
   const content = state.phase === 'listening' ? 'wave' : state.phase === 'error' ? 'message' : 'loader';
   const contentDelay = justOpened ? 0.14 : 0.06;
@@ -82,13 +82,13 @@ export function Pill({ state, platform, onShape }: { state: PillState; platform:
   const swap = reduced
     ? {
         initial: { opacity: 0 },
-        animate: { opacity: 1, transition: { duration: 0.15 } },
-        exit: { opacity: 0, transition: { duration: 0.1 } },
+        animate: { opacity: 1, transition: { duration: 0.25, delay: 0.05, ease: EXPO } },
+        exit: { opacity: 0, transition: { duration: 0.15, ease: EXPO } },
       }
     : {
         initial: { opacity: 0, scale: 0.92, filter: 'blur(4px)' },
-        animate: { opacity: 1, scale: 1, filter: 'blur(0px)', transition: { duration: 0.24, delay: contentDelay, ease: EASE_OUT } },
-        exit: { opacity: 0, scale: 0.94, filter: 'blur(4px)', transition: { duration: 0.12, ease: EASE_OUT } },
+        animate: { opacity: 1, scale: 1, filter: 'blur(0px)', transition: { duration: 0.32, delay: contentDelay, ease: EXPO } },
+        exit: { opacity: 0, scale: 0.94, filter: 'blur(4px)', transition: { duration: 0.15, ease: EXPO } },
       };
 
   return (
@@ -106,28 +106,28 @@ export function Pill({ state, platform, onShape }: { state: PillState; platform:
             className="pill relative overflow-hidden"
             data-os={platform.os}
             style={{ height: H, borderRadius: H / 2 }}
-            initial={reduced ? { opacity: 0, width } : { opacity: 0, scale: 0.8, y: 10, width: DOT }}
+            initial={reduced ? { opacity: 0, width: DOT } : { opacity: 0, scale: 0.8, y: 10, width: DOT }}
             animate={{
               opacity: 1,
               scale: 1,
               y: 0,
               width,
               transition: {
-                opacity: { duration: 0.16, ease: EASE_OUT },
-                scale: mac ? { duration: 0.3, ease: EASE_OUT } : { type: 'spring', duration: 0.4, bounce: 0.3 },
-                y: mac ? { duration: 0.3, ease: EASE_OUT } : { type: 'spring', duration: 0.4, bounce: 0.2 },
+                opacity: { duration: 0.2, ease: EXPO },
+                scale: { duration: 0.45, ease: EXPO },
+                y: { duration: 0.45, ease: EXPO },
                 width: widthT,
               },
             }}
             exit={
               reduced
-                ? { opacity: 0, transition: { duration: 0.12 } }
+                ? { width: [null, DOT], opacity: [1, 0], transition: { duration: 0.3, ease: EXPO } }
                 : {
                     width: [null, DOT, DOT],
                     opacity: [1, 1, 0],
                     scale: [1, 1, 0.82],
                     y: [0, 0, 6],
-                    transition: { duration: 0.36, times: [0, 0.55, 1], ease: DRAWER },
+                    transition: { duration: 0.45, times: [0, 0.55, 1], ease: EXPO },
                   }
             }
           >
@@ -145,7 +145,7 @@ export function Pill({ state, platform, onShape }: { state: PillState; platform:
                   style={{ paddingLeft: state.phase === 'formatting' ? PAD_L : (LOADER_W - LOADER_SPAN) / 2 }}
                   {...swap}
                   layout="position"
-                  transition={{ layout: { type: 'spring', duration: 0.4, bounce: 0.12 } }}
+                  transition={{ layout: { duration: 0.5, ease: EXPO } }}
                 >
                   <Loader reduced={reduced} delay={contentDelay} />
                   <AnimatePresence initial={false}>
@@ -155,8 +155,8 @@ export function Pill({ state, platform, onShape }: { state: PillState; platform:
                         className="pill-label pill-gradient-text whitespace-nowrap"
                         style={{ marginLeft: TEXT_GAP }}
                         initial={reduced ? { opacity: 0 } : { opacity: 0, x: -6, filter: 'blur(3px)' }}
-                        animate={{ opacity: 1, x: 0, filter: 'blur(0px)', transition: { duration: 0.26, delay: 0.1, ease: EASE_OUT } }}
-                        exit={{ opacity: 0, transition: { duration: 0.1 } }}
+                        animate={{ opacity: 1, x: 0, filter: 'blur(0px)', transition: { duration: 0.4, delay: 0.1, ease: EXPO } }}
+                        exit={{ opacity: 0, transition: { duration: 0.12, ease: EXPO } }}
                       >
                         {label}
                       </motion.span>
@@ -187,7 +187,7 @@ function Loader({ reduced, delay }: { reduced: boolean; delay: number }) {
           className="pill-blob loader-blob"
           style={{ animationDelay: `${i * 200}ms` }}
           initial={reduced ? false : { scale: 0.3, opacity: 0 }}
-          animate={{ scale: 1, opacity: 0.85, transition: { type: 'spring', duration: 0.42, bounce: 0.35, delay: delay + i * 0.05 } }}
+          animate={{ scale: 1, opacity: 0.85, transition: { duration: 0.5, ease: EXPO, delay: delay + i * 0.05 } }}
         />
       ))}
     </div>

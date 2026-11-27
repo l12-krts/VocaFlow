@@ -22,7 +22,7 @@ function Shimmer() {
       if (!b || !band.current || !line.current) return;
       b.style.width = `${width}px`;
       b.style.height = `${height}px`;
-      const ease = 'cubic-bezier(0.23, 1, 0.32, 1)';
+      const ease = 'cubic-bezier(0.16, 1, 0.3, 1)';
       if (reduced) {
         line.current.animate([{ opacity: 0 }, { opacity: 0.7 }, { opacity: 0 }], { duration: 500, easing: 'ease' });
         return;
